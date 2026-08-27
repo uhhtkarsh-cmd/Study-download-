@@ -1,0 +1,6 @@
+{
+  "name": "ThorStream Bot & Downloader",
+  "description": "High-speed Telegram Bot & AuraStream Liquid Glass Web Suite for downloading PWThor HLS m3u8 video streams with 1000x multi-threading, custom titles, 16:9 thumbnails, and Pyrogram MTProto 2GB support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

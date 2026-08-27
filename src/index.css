@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .pro-card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+  }
+
+  .pro-card-hover {
+    transition: all 0.2s ease;
+  }
+  .pro-card-hover:hover {
+    border-color: #334155;
+  }
+}
+
+/* Custom smooth scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+

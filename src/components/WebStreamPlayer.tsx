@@ -1,57 +1,34 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import Hls from "hls.js";
 import {
   Play,
   Pause,
   Volume2,
   VolumeX,
-  ShieldCheck,
-  ShieldAlert,
-  Sparkles,
-  Terminal,
-  Copy,
-  Check,
+  Volume1,
   Maximize,
   Minimize,
   RotateCcw,
   RotateCw,
-  Gauge,
-  Sliders,
-  Send,
-  ExternalLink,
-  Tv,
-  CheckCircle2,
-  AlertTriangle,
-  RefreshCw,
-  Radio,
-  Zap,
-  HardDrive,
   Download,
-  Clock,
-  HelpCircle,
-  Film,
-  CheckCircle,
-  Flame,
-  Volume1,
-  Bookmark,
-  Share2,
-  Eye,
-  Repeat,
-  Moon,
-  Sun,
-  Keyboard,
-  FileText,
-  Trash2,
-  Layers,
-  ChevronRight,
+  Settings,
   PictureInPicture2,
-  Maximize2,
-  Lock,
-  Globe,
-  Settings
+  Copy,
+  Check,
+  ArrowLeft,
+  MoreVertical,
+  Radio,
+  Tv,
+  Zap,
+  CheckCircle2,
+  X,
+  RefreshCw,
+  ScreenShare,
+  Smartphone,
+  Sparkles,
+  Loader2,
+  AlertTriangle
 } from "lucide-react";
-import { BOT_CONFIG_DEFAULTS } from "../data/botFiles";
-import { ProxyConfigModal, PacConfig, DEFAULT_PAC_CONFIG } from "./ProxyConfigModal";
 
 interface StoredVideo {
   fileId: string;
@@ -65,183 +42,130 @@ interface StoredVideo {
   playerUrl: string;
 }
 
-interface StreamHealth {
-  status: "idle" | "checking" | "active" | "expired" | "error" | "unreachable";
-  httpStatus?: number;
-  message?: string;
-}
-
-interface BookmarkItem {
-  id: string;
-  time: number;
-  formattedTime: string;
-  note: string;
-  createdAt: number;
+interface ActiveDownloadJob {
+  taskId: string;
+  title: string;
+  quality: string;
+  percentage: number;
+  downloadedMB: number;
+  totalSize: string;
+  speed: string;
+  status: "starting" | "downloading" | "uploading" | "completed" | "error";
+  error?: string;
+  downloadUrl?: string;
 }
 
 const PRESET_STREAMS = [
   {
-    name: "🌟 Working Test Stream (1080p / 720p HD)",
+    name: "🎬 Adaptive HD Stream (1080p / 720p)",
     url: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-    description: "Verified 24/7 high-speed adaptive multi-bitrate HLS stream (Recommended)"
   },
   {
-    name: "🎬 Tears of Steel HD HLS (1080p)",
+    name: "⚡ Sample Video Stream",
     url: "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
-    description: "Multi-bitrate cinematic HLS test stream with audio track switching"
   },
   {
-    name: "⚡ Akamai Live Stream (Multi-Quality)",
-    url: "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8",
-    description: "Multi-bitrate live video test stream with instantaneous CDN edge delivery"
-  },
-  {
-    name: "📺 Big Buck Bunny (Direct HD)",
+    name: "📺 Standard MP4 Video",
     url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-    description: "Direct high-speed 16:9 HD MP4 stream"
   }
 ];
 
 export const WebStreamPlayer: React.FC = () => {
-  // Read URL query params if any
+  // Initial stream URL detection
   const getInitialUrl = () => {
     try {
       const params = new URLSearchParams(window.location.search);
       const queryUrl = params.get("url") || params.get("stream");
       if (queryUrl) return queryUrl;
-    } catch {
-      // ignore
-    }
-    return "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+    } catch {}
+    return PRESET_STREAMS[0].url;
   };
 
   const [streamUrl, setStreamUrl] = useState<string>(getInitialUrl);
+  const [inputUrl, setInputUrl] = useState<string>("");
+  const [videoTitle, setVideoTitle] = useState<string>("Video Stream Player");
+  
+  // Playback states
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(1);
-  const [volumeBoost, setVolumeBoost] = useState<number>(100); // 100% to 200%
+  const [volumeBoost, setVolumeBoost] = useState<number>(100);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
-  const [isHolding2x, setIsHolding2x] = useState(false);
-  const [previousSpeedBeforeHold, setPreviousSpeedBeforeHold] = useState(1.0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [bufferedEnd, setBufferedEnd] = useState(0);
   const [streamStatus, setStreamStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [streamError, setStreamError] = useState<string | null>(null);
-  const [levels, setLevels] = useState<{ id: number; label: string; height?: number; bitrate?: number }[]>([]);
+
+  // Qualities & Levels
+  const [levels, setLevels] = useState<{ id: number; label: string; height?: number }[]>([]);
   const [currentLevel, setCurrentLevel] = useState<number>(-1);
 
-  // 15+ Advanced Pro Player State
-  const [aspectRatio, setAspectRatio] = useState<"16:9" | "4:3" | "cover" | "contain">("16:9");
-  const [isTheaterMode, setIsTheaterMode] = useState(false);
-  const [isLandscape, setIsLandscape] = useState(false);
-  const [isPiPActive, setIsPiPActive] = useState(false);
-  const [ambilightEnabled, setAmbilightEnabled] = useState(true);
-  const [videoFilter, setVideoFilter] = useState<"normal" | "night" | "warm" | "contrast" | "invert">("normal");
-  
-  // A-B Loop State
-  const [loopA, setLoopA] = useState<number | null>(null);
-  const [loopB, setLoopB] = useState<number | null>(null);
-  const [isLoopActive, setIsLoopActive] = useState(false);
+  // UI Control visibility & landscape modes
+  const [showControls, setShowControls] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isLandscapeMode, setIsLandscapeMode] = useState(false);
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
 
-  // Sleep Timer
-  const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
-  const [sleepTimerRemaining, setSleepTimerRemaining] = useState<number | null>(null);
+  // Download job state (Live progress tracking)
+  const [activeDownloadJob, setActiveDownloadJob] = useState<ActiveDownloadJob | null>(null);
+  const [isStartingDownload, setIsStartingDownload] = useState(false);
 
-  // Bookmarks & Notes
-  const [bookmarks, setBookmarks] = useState<BookmarkItem[]>(() => {
-    try {
-      const saved = localStorage.getItem("thorstream_bookmarks");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [newNoteText, setNewNoteText] = useState("");
-  const [showAddNoteModal, setShowAddNoteModal] = useState(false);
+  // Holding 2x speed
+  const [isHolding2x, setIsHolding2x] = useState(false);
+  const [speedBeforeHold, setSpeedBeforeHold] = useState(1.0);
 
-  // Modals & UI Toggles
-  const [showKeybindsModal, setShowKeybindsModal] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [showRefreshGuide, setShowRefreshGuide] = useState(false);
-  const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
+  // Ripple feedback animation
+  const [seekRipple, setSeekRipple] = useState<"forward" | "backward" | null>(null);
 
-  // Proxy Auto-Configuration (PAC) Helper State
-  const [pacConfig, setPacConfig] = useState<PacConfig>(() => {
-    try {
-      const saved = localStorage.getItem("thorstream_pac_config");
-      return saved ? JSON.parse(saved) : DEFAULT_PAC_CONFIG;
-    } catch {
-      return DEFAULT_PAC_CONFIG;
-    }
-  });
-  const [showPacModal, setShowPacModal] = useState(false);
-  const [showPac403Banner, setShowPac403Banner] = useState(false);
+  // Copied toast
+  const [copied, setCopied] = useState(false);
 
-  // Ripple feedback on seek
-  const [seekRipple, setSeekRipple] = useState<{ type: "forward" | "backward"; key: number } | null>(null);
-
-  // Copy & Action States
-  const [copiedCmd, setCopiedCmd] = useState(false);
-  const [copiedVlc, setCopiedVlc] = useState(false);
-  const [copiedShareLink, setCopiedShareLink] = useState(false);
-
-  // Token Health & Storage
-  const [streamHealth, setStreamHealth] = useState<StreamHealth>({ status: "idle" });
+  // Saved / Downloaded Videos
   const [storedVideos, setStoredVideos] = useState<StoredVideo[]>([]);
-  const [activeTab, setActiveTab] = useState<"live" | "permanent">("live");
-  const [isSavingPermanent, setIsSavingPermanent] = useState(false);
-  const [savePermanentMsg, setSavePermanentMsg] = useState<string | null>(null);
 
+  // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
-  const loadingTimerRef = useRef<any>(null);
+  const hideControlsTimerRef = useRef<any>(null);
   const holdTimerRef = useRef<any>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
-  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
+  const downloadPollTimerRef = useRef<any>(null);
 
-  // Persist bookmarks
-  useEffect(() => {
-    try {
-      localStorage.setItem("thorstream_bookmarks", JSON.stringify(bookmarks));
-    } catch {
-      // ignore
+  // Format seconds to H:MM:SS or MM:SS
+  const formatTime = (secs: number) => {
+    if (isNaN(secs) || secs < 0) return "0:00";
+    const totalSecs = Math.floor(secs);
+    const h = Math.floor(totalSecs / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60);
+    const s = totalSecs % 60;
+    const formattedM = h > 0 ? String(m).padStart(2, "0") : String(m);
+    const formattedS = String(s).padStart(2, "0");
+    if (h > 0) {
+      return `${h}:${formattedM}:${formattedS}`;
     }
-  }, [bookmarks]);
-
-  // Web Audio API Gain Booster (up to 200%)
-  const initAudioBooster = () => {
-    const video = videoRef.current;
-    if (!video || audioContextRef.current) return;
-
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-
-      const ctx = new AudioCtx();
-      const gainNode = ctx.createGain();
-      const source = ctx.createMediaElementSource(video);
-
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      audioContextRef.current = ctx;
-      gainNodeRef.current = gainNode;
-      sourceNodeRef.current = source;
-      gainNode.gain.value = volumeBoost / 100;
-    } catch (e) {
-      console.warn("Web Audio API booster initialization notice:", e);
-    }
+    return `${formattedM}:${formattedS}`;
   };
 
-  // Update volume gain booster
-  useEffect(() => {
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = (volumeBoost / 100) * volume;
-    }
-  }, [volumeBoost, volume]);
+  // Helper to extract clean lecture title from URL
+  const extractTitle = (url: string): string => {
+    try {
+      const u = new URL(url);
+      const parts = u.pathname.split("/").filter(Boolean);
+      const last = parts[parts.length - 1] || "";
+      if (last && !last.includes("master") && !last.includes("index")) {
+        return decodeURIComponent(last).replace(/\.(m3u8|mp4)$/, "").replace(/[_-]/g, " ");
+      }
+    } catch {}
+    return "Online Video Stream";
+  };
 
+  // Fetch saved videos from backend
   const fetchStoredVideos = async () => {
     try {
       const res = await fetch("/api/stored-videos");
@@ -249,419 +173,315 @@ export const WebStreamPlayer: React.FC = () => {
         const data = await res.json();
         setStoredVideos(data.videos || []);
       }
-    } catch {
-      // ignore
-    }
-  };
-
-  const checkStreamHealth = async (url: string, pacOverride?: PacConfig) => {
-    if (!url.trim()) return;
-    setStreamHealth({ status: "checking", message: "Verifying stream & PAC tunnel..." });
-    const currentPac = pacOverride || pacConfig;
-
-    try {
-      const res = await fetch("/api/check-stream-health", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: url.trim(),
-          cookie: currentPac.cookie,
-          referer: currentPac.referer,
-          origin: currentPac.origin,
-          userAgent: currentPac.userAgent,
-          authorization: currentPac.authorization,
-          profile: currentPac.profile,
-        })
-      });
-      const data = await res.json();
-      setStreamHealth({
-        status: data.status || "idle",
-        httpStatus: data.httpStatus,
-        message: data.message
-      });
-      if (data.httpStatus === 403 || data.status === "expired") {
-        setShowPac403Banner(true);
-      } else {
-        setShowPac403Banner(false);
-      }
-    } catch (e: any) {
-      setStreamHealth({
-        status: "unreachable",
-        message: "Failed to connect to verification proxy"
-      });
-    }
-  };
-
-  const handleSaveToPermanent = async () => {
-    if (!streamUrl.trim()) return;
-    setIsSavingPermanent(true);
-    setSavePermanentMsg(null);
-
-    try {
-      const res = await fetch("/api/convert-to-permanent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: streamUrl.trim() })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setSavePermanentMsg("🚀 Permanent download started! Once saved, the video will NEVER expire.");
-        setTimeout(() => fetchStoredVideos(), 3000);
-      } else {
-        setSavePermanentMsg(data.error || "Failed to start permanent download.");
-      }
-    } catch (e: any) {
-      setSavePermanentMsg(`Error: ${e.message}`);
-    } finally {
-      setIsSavingPermanent(false);
-    }
-  };
-
-  const getProxyUrl = (rawUrl: string, overridePac?: PacConfig) => {
-    if (rawUrl.startsWith("/api/")) return rawUrl;
-    const currentPac = overridePac || pacConfig;
-    const params = new URLSearchParams();
-    params.set("url", rawUrl.trim());
-
-    if (currentPac && currentPac.enabled) {
-      if (currentPac.cookie?.trim()) params.set("pac_cookie", currentPac.cookie.trim());
-      if (currentPac.referer?.trim()) params.set("pac_ref", currentPac.referer.trim());
-      if (currentPac.origin?.trim()) params.set("pac_origin", currentPac.origin.trim());
-      if (currentPac.userAgent?.trim()) params.set("pac_ua", currentPac.userAgent.trim());
-      if (currentPac.authorization?.trim()) params.set("pac_auth", currentPac.authorization.trim());
-      if (currentPac.profile) params.set("pac_profile", currentPac.profile);
-    }
-
-    return `/api/proxy-m3u8?${params.toString()}`;
-  };
-
-  const handleSavePacConfig = (newConfig: PacConfig, reloadStream = false) => {
-    setPacConfig(newConfig);
-    try {
-      localStorage.setItem("thorstream_pac_config", JSON.stringify(newConfig));
     } catch {}
-    if (reloadStream) {
-      setTimeout(() => {
-        loadStream(streamUrl, newConfig);
-      }, 50);
-    }
   };
 
-  const destroyCurrentHls = () => {
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.stopLoad();
-        hlsRef.current.detachMedia();
-        hlsRef.current.destroy();
-      } catch (e) {
-        console.warn("Hls destruction warning:", e);
-      }
-      hlsRef.current = null;
-    }
-  };
+  // Load stream into video element with auto-recovery
+  const loadStream = useCallback((urlToLoad: string, isAutoRetry = false) => {
+    const video = videoRef.current;
+    if (!video || !urlToLoad) return;
 
-  const loadStream = (url: string, overridePac?: PacConfig) => {
-    if (!url.trim()) return;
     setStreamStatus("loading");
     setStreamError(null);
-    const currentPac = overridePac || pacConfig;
+    setCurrentTime(0);
+    setBufferedEnd(0);
+    setShowSettingsModal(false);
+    setShowDownloadModal(false);
+    setShowMoreMenu(false);
 
-    // Run health check
-    checkStreamHealth(url, currentPac);
-
-    // Auto-dismiss loading screen after 2.5s maximum so user is never stuck
-    if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
-    loadingTimerRef.current = setTimeout(() => {
-      setStreamStatus((prev) => (prev === "loading" ? "ready" : prev));
-    }, 2500);
-
-    const video = videoRef.current;
-    if (!video) return;
-
-    destroyCurrentHls();
-
-    const proxySource = getProxyUrl(url, currentPac);
-
-    // Direct MP4 check or internal permanent video route
-    if (url.endsWith(".mp4") || url.includes(".mp4?") || url.startsWith("/api/stream-video/")) {
-      video.src = url.startsWith("/api/") ? url : (url.startsWith("http") && !url.includes("pwthor") ? url : proxySource);
-      video.muted = true;
-      video.load();
-      video.play().then(() => {
-        setIsPlaying(true);
-        setStreamStatus("ready");
-      }).catch((e) => {
-        console.warn("Autoplay notice:", e);
-        setStreamStatus("ready");
-      });
-      return;
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
     }
 
-    if (Hls.isSupported()) {
+    setVideoTitle(extractTitle(urlToLoad));
+
+    const isHls = urlToLoad.includes(".m3u8") || urlToLoad.includes("proxy-stream") || urlToLoad.includes("proxy-m3u8") || urlToLoad.includes("studyspark");
+
+    if (isHls && Hls.isSupported()) {
       const hls = new Hls({
-        enableWorker: false,
-        lowLatencyMode: false,
+        enableWorker: true,
+        lowLatencyMode: true,
         backBufferLength: 90,
         maxBufferLength: 30,
-        maxMaxBufferLength: 600,
-        maxBufferSize: 60 * 1000 * 1000,
+        maxMaxBufferLength: 60,
+        fragLoadingTimeOut: 25000,
+        manifestLoadingTimeOut: 20000,
+        levelLoadingTimeOut: 20000,
       });
-      hlsRef.current = hls;
 
-      try {
-        hls.loadSource(proxySource);
-        hls.attachMedia(video);
-      } catch (e) {
-        console.error("Hls loadSource error:", e);
-      }
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        hls.loadSource(urlToLoad);
+      });
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
         setStreamStatus("ready");
-        const availableLevels = (data.levels || []).map((lvl, index) => {
-          const h = lvl.height || (lvl.attrs as any)?.RESOLUTION?.split("x")[1] || "HD";
-          const kbps = Math.round((lvl.bitrate || 0) / 1000);
-          return {
-            id: index,
-            label: `${h}p ${kbps > 0 ? `(${kbps} kbps)` : ""}`,
-            height: lvl.height,
-            bitrate: lvl.bitrate
-          };
-        });
-
+        const availableLevels = data.levels.map((lvl, idx) => ({
+          id: idx,
+          label: lvl.height ? `${lvl.height}p` : `Stream ${idx + 1}`,
+          height: lvl.height,
+        }));
         setLevels(availableLevels);
-        
-        video.muted = true;
-        setIsMuted(true);
+        setCurrentLevel(hls.currentLevel);
+
+        // Attempt instant auto-play
         video.play().then(() => {
           setIsPlaying(true);
         }).catch(() => {
-          setIsPlaying(false);
+          video.muted = true;
+          setIsMuted(true);
+          video.play().then(() => setIsPlaying(true)).catch(() => {});
         });
       });
 
       hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
-        if (data && typeof data.level === "number") {
-          setCurrentLevel(data.level);
-        }
+        setCurrentLevel(data.level);
       });
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (!hlsRef.current) return;
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              destroyCurrentHls();
-              setStreamStatus("error");
-              setShowPac403Banner(true);
-              setStreamHealth({
-                status: "expired",
-                httpStatus: 403,
-                message: "403 Forbidden or CORS restricted stream. Use PAC Auto-Config to inject authentication cookies/headers."
-              });
-              setStreamError("Stream blocked with 403 Forbidden or CORS restriction. Use the 'Proxy Auto-Configuration (PAC)' helper to inject valid cookies, referer, and spoof headers.");
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              try {
-                hls.recoverMediaError();
-              } catch {
-                // ignore
+              if (!isAutoRetry && !urlToLoad.includes("/api/proxy-m3u8")) {
+                // Auto-repair expired token / CDN link
+                const repaired = `/api/proxy-m3u8?url=${encodeURIComponent(urlToLoad)}`;
+                loadStream(repaired, true);
+              } else {
+                hls.startLoad();
               }
               break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
             default:
-              destroyCurrentHls();
               setStreamStatus("error");
-              setStreamError("Stream server error or expired stream token. Please use PAC Auto-Config or test with the working test stream.");
+              setStreamError("Stream link may be expired or inaccessible.");
+              hls.destroy();
               break;
           }
         }
       });
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      // Native Safari HLS
-      video.src = proxySource;
-      video.muted = true;
-      setIsMuted(true);
-      video.addEventListener("loadedmetadata", () => {
-        setStreamStatus("ready");
-        video.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-      });
-    } else {
-      setStreamStatus("error");
-      setStreamError("Your browser does not support HLS stream playback.");
-    }
-  };
 
+      hlsRef.current = hls;
+    } else {
+      // Native MP4 or Safari Native HLS
+      video.src = urlToLoad;
+      video.load();
+      video.play().then(() => {
+        setIsPlaying(true);
+        setStreamStatus("ready");
+      }).catch(() => {
+        setStreamStatus("ready");
+      });
+    }
+  }, []);
+
+  // Initialize from Route / Params
   useEffect(() => {
-    loadStream(streamUrl);
+    const initPlayerFromRoute = async () => {
+      try {
+        const path = window.location.pathname;
+        const search = new URLSearchParams(window.location.search);
+        
+        let detectedId: string | null = search.get("id") || search.get("streamId");
+        if (!detectedId) {
+          const pathMatch = path.match(/\/(?:player|play|watch|p)\/([^/?#]+)/);
+          if (pathMatch && pathMatch[1]) {
+            detectedId = pathMatch[1];
+          }
+        }
+
+        const rawUrl = search.get("url") || search.get("stream");
+
+        if (detectedId) {
+          try {
+            const metaRes = await fetch(`/api/stream-meta/${detectedId}`);
+            if (metaRes.ok) {
+              const meta = await metaRes.json();
+              if (meta.streamUrl) {
+                setStreamUrl(meta.streamUrl);
+                if (meta.title) setVideoTitle(meta.title);
+                loadStream(meta.streamUrl);
+                return;
+              }
+            }
+          } catch {}
+          const fallbackUrl = `/api/proxy-stream/${detectedId}/master.m3u8`;
+          setStreamUrl(fallbackUrl);
+          loadStream(fallbackUrl);
+          return;
+        }
+
+        if (rawUrl) {
+          setStreamUrl(rawUrl);
+          loadStream(rawUrl);
+          return;
+        }
+
+        loadStream(streamUrl);
+      } catch {
+        loadStream(streamUrl);
+      }
+    };
+
+    initPlayerFromRoute();
     fetchStoredVideos();
     const interval = setInterval(fetchStoredVideos, 8000);
-    return () => {
-      clearInterval(interval);
-      destroyCurrentHls();
-      if (loadingTimerRef.current) {
-        clearTimeout(loadingTimerRef.current);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Video element event handlers
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const onTimeUpdate = () => {
+      setCurrentTime(video.currentTime);
+      if (video.buffered.length > 0) {
+        setBufferedEnd(video.buffered.end(video.buffered.length - 1));
       }
+    };
+
+    const onDurationChange = () => {
+      setDuration(video.duration || 0);
+    };
+
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onVolumeChange = () => {
+      setVolume(video.volume);
+      setIsMuted(video.muted);
+    };
+
+    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("durationchange", onDurationChange);
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("volumechange", onVolumeChange);
+
+    return () => {
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("durationchange", onDurationChange);
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("volumechange", onVolumeChange);
     };
   }, []);
 
-  // Sleep Timer Interval Check
-  useEffect(() => {
-    if (sleepTimerRemaining === null || sleepTimerRemaining <= 0) return;
-    const timer = setInterval(() => {
-      setSleepTimerRemaining((prev) => {
-        if (prev === null || prev <= 1) {
-          if (videoRef.current) {
-            videoRef.current.pause();
-            setIsPlaying(false);
-          }
-          setSleepTimerMinutes(null);
-          return null;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [sleepTimerRemaining]);
-
-  const setSleepTimer = (minutes: number | null) => {
-    setSleepTimerMinutes(minutes);
-    if (minutes === null) {
-      setSleepTimerRemaining(null);
-    } else {
-      setSleepTimerRemaining(minutes * 60);
+  // Auto-hide controls timer
+  const resetControlsTimer = useCallback(() => {
+    setShowControls(true);
+    if (hideControlsTimerRef.current) {
+      clearTimeout(hideControlsTimerRef.current);
     }
-  };
+    if (isPlaying) {
+      hideControlsTimerRef.current = setTimeout(() => {
+        setShowControls(false);
+        setShowMoreMenu(false);
+        setShowSpeedMenu(false);
+        setShowVolumeSlider(false);
+      }, 3500);
+    }
+  }, [isPlaying]);
+
+  useEffect(() => {
+    resetControlsTimer();
+    return () => {
+      if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
+    };
+  }, [isPlaying, resetControlsTimer]);
+
+  // Fullscreen change listener
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const isFs = !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      if (!isFs) {
+        setIsLandscapeMode(false);
+      }
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
 
   // Playback Control Handlers
   const togglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
-    initAudioBooster();
-
     if (video.paused) {
       video.play().then(() => setIsPlaying(true)).catch(() => {});
     } else {
       video.pause();
       setIsPlaying(false);
     }
+    resetControlsTimer();
+  };
+
+  const seekRelative = (seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
+    if (seconds > 0) {
+      setSeekRipple("forward");
+      setTimeout(() => setSeekRipple(null), 600);
+    } else {
+      setSeekRipple("backward");
+      setTimeout(() => setSeekRipple(null), 600);
+    }
+    resetControlsTimer();
+  };
+
+  const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const video = videoRef.current;
+    if (!video || !duration) return;
+    const target = (parseFloat(e.target.value) / 100) * duration;
+    video.currentTime = target;
+    setCurrentTime(target);
+    resetControlsTimer();
   };
 
   const toggleMute = () => {
     const video = videoRef.current;
     if (!video) return;
-    initAudioBooster();
-    if (audioContextRef.current && audioContextRef.current.state === "suspended") {
-      audioContextRef.current.resume();
-    }
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+    resetControlsTimer();
+  };
 
-    if (video.muted) {
-      video.muted = false;
-      setIsMuted(false);
-      video.volume = volume > 0 ? volume : 1;
-    } else {
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const val = parseFloat(e.target.value);
+    video.volume = val;
+    setVolume(val);
+    if (val === 0) {
       video.muted = true;
       setIsMuted(true);
-    }
-  };
-
-  const handleVolumeChange = (newVol: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    initAudioBooster();
-    video.volume = newVol;
-    setVolume(newVol);
-    if (newVol > 0 && video.muted) {
+    } else if (video.muted) {
       video.muted = false;
       setIsMuted(false);
     }
   };
 
-  const setSpeed = (spd: number) => {
+  const changeSpeed = (speed: number) => {
     const video = videoRef.current;
     if (!video) return;
-    video.playbackRate = spd;
-    (video as any).preservesPitch = true;
-    setPlaybackSpeed(spd);
+    video.playbackRate = speed;
+    setPlaybackSpeed(speed);
+    setShowSpeedMenu(false);
+    setShowSettingsModal(false);
+    resetControlsTimer();
   };
 
-  // FEATURE: Hold to 2x Speed (YouTube-Style)
-  const startHold2x = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    setPreviousSpeedBeforeHold(playbackSpeed);
-    setIsHolding2x(true);
-    video.playbackRate = 2.0;
-    (video as any).preservesPitch = true;
-  };
-
-  const endHold2x = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    setIsHolding2x(false);
-    video.playbackRate = previousSpeedBeforeHold;
-    (video as any).preservesPitch = true;
-  };
-
-  const skipSeconds = (seconds: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Math.max(0, Math.min(video.duration || 999999, video.currentTime + seconds));
-    setSeekRipple({
-      type: seconds > 0 ? "forward" : "backward",
-      key: Date.now()
-    });
-    setTimeout(() => setSeekRipple(null), 700);
-  };
-
-  const handleLevelChange = (levelIndex: number) => {
+  const changeQuality = (levelId: number) => {
     if (hlsRef.current) {
-      hlsRef.current.currentLevel = levelIndex;
-      setCurrentLevel(levelIndex);
+      hlsRef.current.currentLevel = levelId;
+      setCurrentLevel(levelId);
     }
-  };
-
-  const toggleLandscape = async () => {
-    const nextState = !isLandscape;
-    setIsLandscape(nextState);
-
-    try {
-      if (nextState) {
-        if (screen.orientation && (screen.orientation as any).lock) {
-          await (screen.orientation as any).lock("landscape").catch(() => {});
-        }
-        if (playerContainerRef.current && !document.fullscreenElement) {
-          await playerContainerRef.current.requestFullscreen().catch(() => {});
-        }
-      } else {
-        if (screen.orientation && (screen.orientation as any).unlock) {
-          (screen.orientation as any).unlock();
-        }
-        if (document.exitFullscreen && document.fullscreenElement) {
-          await document.exitFullscreen().catch(() => {});
-        }
-      }
-    } catch (e) {
-      console.warn("Landscape orientation notice:", e);
-    }
-  };
-
-  const openInVlc = () => {
-    const url = streamUrl.trim();
-    if (!url) return;
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-    
-    if (isAndroid) {
-      const intentUrl = "intent:" + url + "#Intent;action=android.intent.action.VIEW;type=video/*;package=com.mxtech.videoplayer.ad;end";
-      window.location.href = intentUrl;
-      setTimeout(() => {
-        window.location.href = "vlc://" + url;
-      }, 800);
-    } else if (isIOS) {
-      window.location.href = "vlc-x-callback://x-callback-url/stream?url=" + encodeURIComponent(url);
-    } else {
-      window.location.href = "vlc://" + url;
-    }
+    setShowSettingsModal(false);
+    resetControlsTimer();
   };
 
   const toggleFullscreen = () => {
@@ -673,1401 +493,1001 @@ export const WebStreamPlayer: React.FC = () => {
     } else {
       document.exitFullscreen().catch(() => {});
     }
+    resetControlsTimer();
+  };
+
+  // Landscape Toggle Handler
+  const toggleLandscape = async () => {
+    const container = playerContainerRef.current;
+    if (!container) return;
+
+    try {
+      if (!isLandscapeMode) {
+        setIsLandscapeMode(true);
+        if (!document.fullscreenElement) {
+          await container.requestFullscreen().catch(() => {});
+        }
+        if ((screen.orientation as any)?.lock) {
+          await (screen.orientation as any).lock("landscape").catch(() => {});
+        }
+      } else {
+        setIsLandscapeMode(false);
+        if ((screen.orientation as any)?.unlock) {
+          (screen.orientation as any).unlock();
+        }
+        if (document.fullscreenElement) {
+          await document.exitFullscreen().catch(() => {});
+        }
+      }
+    } catch {
+      setIsLandscapeMode((prev) => !prev);
+    }
+    resetControlsTimer();
   };
 
   const togglePiP = async () => {
     const video = videoRef.current;
     if (!video) return;
-
     try {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
-        setIsPiPActive(false);
       } else if (video.requestPictureInPicture) {
         await video.requestPictureInPicture();
-        setIsPiPActive(true);
       }
-    } catch (e) {
-      console.warn("PiP not supported or blocked:", e);
-    }
+    } catch {}
+    resetControlsTimer();
   };
 
-  const handleTimeUpdate = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    setCurrentTime(video.currentTime);
-    if (video.duration && !isNaN(video.duration)) {
-      setDuration(video.duration);
-    }
-
-    // A-B Loop Logic
-    if (isLoopActive && loopA !== null && loopB !== null) {
-      if (video.currentTime >= loopB) {
-        video.currentTime = loopA;
-      }
-    }
-  };
-
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const video = videoRef.current;
-    if (!video || !duration) return;
+  // Double tap handler for mobile seek
+  const handleTouchScreen = (e: React.TouchEvent<HTMLVideoElement>) => {
+    const now = Date.now();
+    const touch = e.changedTouches[0];
     const rect = e.currentTarget.getBoundingClientRect();
-    const pos = (e.clientX - rect.left) / rect.width;
-    const newTime = Math.max(0, Math.min(duration, pos * duration));
-    video.currentTime = newTime;
-    setCurrentTime(newTime);
-  };
+    const xRatio = (touch.clientX - rect.left) / rect.width;
 
-  // Keyboard Shortcuts Handler
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept when user is typing in input/textarea
-      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-      if (tag === "input" || tag === "textarea") return;
-
-      if (e.code === "Space") {
-        e.preventDefault();
-        if (!e.repeat) {
-          // Check for long press or tap
-          holdTimerRef.current = setTimeout(() => {
-            startHold2x();
-          }, 300);
-        }
-      } else if (e.code === "KeyK") {
-        e.preventDefault();
+    if (now - lastTapRef.current.time < 300) {
+      // Double tap detected
+      if (xRatio > 0.6) {
+        seekRelative(10);
+      } else if (xRatio < 0.4) {
+        seekRelative(-10);
+      } else {
         togglePlay();
-      } else if (e.code === "KeyJ" || e.code === "ArrowLeft") {
-        e.preventDefault();
-        skipSeconds(-10);
-      } else if (e.code === "KeyL" || e.code === "ArrowRight") {
-        e.preventDefault();
-        skipSeconds(10);
-      } else if (e.code === "KeyF") {
-        e.preventDefault();
-        toggleFullscreen();
-      } else if (e.code === "KeyT") {
-        e.preventDefault();
-        setIsTheaterMode((prev) => !prev);
-      } else if (e.code === "KeyP") {
-        e.preventDefault();
-        togglePiP();
-      } else if (e.code === "KeyM") {
-        e.preventDefault();
-        toggleMute();
-      } else if (e.code === "KeyB") {
-        e.preventDefault();
-        setShowAddNoteModal(true);
-      } else if (e.code === "KeyO") {
-        e.preventDefault();
-        toggleLandscape();
-      } else if (e.code === "Period" && (e.shiftKey || e.metaKey)) {
-        setSpeed(Math.min(3.0, Number((playbackSpeed + 0.25).toFixed(2))));
-      } else if (e.code === "Comma" && (e.shiftKey || e.metaKey)) {
-        setSpeed(Math.max(0.25, Number((playbackSpeed - 0.25).toFixed(2))));
-      } else if (e.key >= "0" && e.key <= "9" && duration > 0) {
-        const pct = parseInt(e.key, 10) / 10;
-        if (videoRef.current) {
-          videoRef.current.currentTime = duration * pct;
-        }
       }
-    };
+      lastTapRef.current = { time: 0, x: 0 };
+    } else {
+      lastTapRef.current = { time: now, x: touch.clientX };
+      togglePlay();
+    }
+  };
 
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
-        if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
-        if (isHolding2x) {
-          endHold2x();
-        } else {
-          togglePlay();
-        }
+  // Press and hold for 2x speed
+  const handleHoldStart = () => {
+    holdTimerRef.current = setTimeout(() => {
+      const video = videoRef.current;
+      if (video && !video.paused) {
+        setSpeedBeforeHold(video.playbackRate);
+        video.playbackRate = 2.0;
+        setIsHolding2x(true);
       }
-    };
+    }, 400);
+  };
 
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
+  const handleHoldEnd = () => {
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    if (isHolding2x) {
+      const video = videoRef.current;
+      if (video) video.playbackRate = speedBeforeHold;
+      setIsHolding2x(false);
+    }
+  };
+
+  // Copy Stream Link Helper
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(streamUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Handle Play Link Input Form
+  const handlePlayInputUrl = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputUrl.trim()) return;
+    setStreamUrl(inputUrl.trim());
+    loadStream(inputUrl.trim());
+    setInputUrl("");
+  };
+
+  // Auto-Fix Expired Stream Handler
+  const handleAutoFixExpiredStream = () => {
+    const repaired = `/api/proxy-m3u8?url=${encodeURIComponent(streamUrl)}`;
+    loadStream(repaired, true);
+  };
+
+  // Start High-Speed Real-time Download
+  const startLiveDownload = async (quality: string) => {
+    setIsStartingDownload(true);
+    try {
+      const res = await fetch("/api/convert-to-permanent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: streamUrl,
+          title: videoTitle,
+          quality: quality === "auto" ? undefined : quality
+        })
+      });
+
+      if (!res.ok) throw new Error("Could not start download task");
+      const data = await res.json();
+      const taskId = data.taskId;
+
+      setActiveDownloadJob({
+        taskId,
+        title: videoTitle,
+        quality: quality === "auto" ? "HD Max" : `${quality}p`,
+        percentage: 0,
+        downloadedMB: 0,
+        totalSize: "Calculating...",
+        speed: "Starting turbo engine...",
+        status: "downloading"
+      });
+
+      // Poll progress every 600ms
+      if (downloadPollTimerRef.current) clearInterval(downloadPollTimerRef.current);
+      downloadPollTimerRef.current = setInterval(async () => {
+        try {
+          const logRes = await fetch("/api/bot/logs");
+          if (logRes.ok) {
+            const botData = await logRes.json();
+            const task = (botData.activeTasks || []).find((t: any) => t.id === taskId);
+            if (task) {
+              setActiveDownloadJob((prev) => {
+                if (!prev) return null;
+                const isDone = task.status === "completed";
+                const isErr = task.status === "error";
+                const safeName = task.title || `${videoTitle}.mp4`;
+                const dlUrl = `/api/download/${taskId}/${encodeURIComponent(safeName)}`;
+
+                if (isDone) {
+                  clearInterval(downloadPollTimerRef.current);
+                  fetchStoredVideos();
+                  // Trigger browser download automatically
+                  const a = document.createElement("a");
+                  a.href = dlUrl;
+                  a.download = safeName;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }
+
+                return {
+                  ...prev,
+                  percentage: task.percentage || 0,
+                  downloadedMB: task.downloadedMB || 0,
+                  totalSize: task.totalSize || `${task.downloadedMB} MB`,
+                  speed: task.speed || "Downloading...",
+                  status: isDone ? "completed" : isErr ? "error" : "downloading",
+                  downloadUrl: isDone ? dlUrl : undefined
+                };
+              });
+            }
+          }
+        } catch {}
+      }, 600);
+    } catch (err: any) {
+      alert(`Download error: ${err.message}`);
+    } finally {
+      setIsStartingDownload(false);
+    }
+  };
+
+  // Clean up timer on unmount
+  useEffect(() => {
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
+      if (downloadPollTimerRef.current) clearInterval(downloadPollTimerRef.current);
     };
-  }, [isPlaying, isHolding2x, playbackSpeed, previousSpeedBeforeHold, duration]);
+  }, []);
 
-  const formatTime = (secs: number) => {
-    if (isNaN(secs) || secs < 0) return "00:00";
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const s = Math.floor(secs % 60);
-    if (h > 0) {
-      return `${h}:${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}`;
-    }
-    return `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}`;
-  };
-
-  // Video Filter CSS Class
-  const getVideoFilterClass = () => {
-    switch (videoFilter) {
-      case "night":
-        return "contrast-125 brightness-90";
-      case "warm":
-        return "sepia-[0.35] brightness-95";
-      case "contrast":
-        return "contrast-150 saturate-125";
-      case "invert":
-        return "invert contrast-125 hue-rotate-180";
-      default:
-        return "";
-    }
-  };
-
-  // Aspect Ratio CSS Class
-  const getAspectRatioClass = () => {
-    switch (aspectRatio) {
-      case "4:3":
-        return "aspect-4/3";
-      case "cover":
-        return "aspect-video object-cover";
-      case "contain":
-        return "aspect-video object-contain";
-      case "16:9":
-      default:
-        return "aspect-video";
-    }
-  };
-
-  // Add Bookmark Note
-  const handleAddBookmark = () => {
-    if (!newNoteText.trim()) return;
-    const newBm: BookmarkItem = {
-      id: Date.now().toString(),
-      time: currentTime,
-      formattedTime: formatTime(currentTime),
-      note: newNoteText.trim(),
-      createdAt: Date.now()
-    };
-    setBookmarks((prev) => [newBm, ...prev]);
-    setNewNoteText("");
-    setShowAddNoteModal(false);
-  };
-
-  const handleDeleteBookmark = (id: string) => {
-    setBookmarks((prev) => prev.filter((b) => b.id !== id));
-  };
-
-  const handleExportNotes = () => {
-    if (bookmarks.length === 0) return;
-    const mdContent = `# ThorStream Lecture Notes & Timestamps\nStream: ${streamUrl}\nExported: ${new Date().toLocaleString()}\n\n` +
-      bookmarks.map((b) => `- **[${b.formattedTime}]**: ${b.note}`).join("\n");
-
-    const blob = new Blob([mdContent], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `lecture-notes-${Date.now()}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const copyFfmpegCmd = () => {
-    const cmd = `ffmpeg -headers "User-Agent: Mozilla/5.0\\r\\nReferer: https://pw.live/\\r\\n" -i "${streamUrl}" -c copy -bsf:a aac_adtstoasc "PW_Class_Turbo.mp4"`;
-    navigator.clipboard.writeText(cmd);
-    setCopiedCmd(true);
-    setTimeout(() => setCopiedCmd(false), 2500);
-  };
-
-  const copyVlcLink = () => {
-    const fullProxy = streamUrl.startsWith("/api/")
-      ? `${window.location.origin}${streamUrl}`
-      : `${window.location.origin}/api/proxy-m3u8?url=${encodeURIComponent(streamUrl)}`;
-    navigator.clipboard.writeText(fullProxy);
-    setCopiedVlc(true);
-    setTimeout(() => setCopiedVlc(false), 2500);
-  };
-
-  const getShareablePlayerUrl = () => {
-    const baseUrl = `${window.location.origin}/?tab=player&url=${encodeURIComponent(streamUrl)}&t=${Math.floor(currentTime)}`;
-    return baseUrl;
-  };
-
-  const copyShareLink = () => {
-    navigator.clipboard.writeText(getShareablePlayerUrl());
-    setCopiedShareLink(true);
-    setTimeout(() => setCopiedShareLink(false), 2500);
-  };
+  // Calculate progress percentage
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const bufferedPercent = duration > 0 ? (bufferedEnd / duration) * 100 : 0;
 
   return (
-    <div className={`mx-auto py-2 space-y-6 transition-all duration-300 ${isTheaterMode ? "max-w-full px-2" : "max-w-7xl"}`}>
-      
-      {/* Expiry Solution Banner if token is expired */}
-      {streamHealth.status === "expired" && (
-        <div className="bg-amber-950/40 border-2 border-amber-500/50 rounded-2xl p-5 shadow-2xl backdrop-blur-md">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm sm:text-base font-bold text-amber-200">
-                    ⚠️ PW Thor Stream Token Expired ({streamHealth.httpStatus || 401})
-                  </h3>
-                  <span className="text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">
-                    Session Timed Out
-                  </span>
-                </div>
-                <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl">
-                  PW Thor stream links use temporary security tokens that expire after 1–2 hours. The custom web player is 100% active, but the upstream server requires a refreshed link or a permanently saved video.
-                </p>
-              </div>
-            </div>
+    <div className={`w-full max-w-5xl mx-auto space-y-4 animate-fadeIn pb-12 font-sans selection:bg-indigo-600 selection:text-white ${isLandscapeMode ? "fixed inset-0 z-50 bg-black p-0 m-0 max-w-none flex flex-col justify-center items-center h-screen w-screen overflow-hidden" : ""}`}>
+      {/* 
+        ========================================================================
+        TOP BAR: Simple, Clean & Responsive
+        ========================================================================
+      */}
+      {!isLandscapeMode && (
+        <div className="bg-slate-900 text-white px-3 sm:px-4 py-2.5 rounded-t-2xl sm:rounded-t-3xl flex items-center justify-between shadow-xl border-b border-slate-800">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <button
+              onClick={() => {
+                if (window.history.length > 1) window.history.back();
+                else loadStream(PRESET_STREAMS[0].url);
+              }}
+              className="p-1.5 hover:bg-white/10 rounded-full transition-colors active:scale-95 cursor-pointer text-white flex-shrink-0"
+              title="Go back"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
 
-            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto shrink-0">
-              <button
-                onClick={() => setShowRefreshGuide(true)}
-                className="flex-1 md:flex-initial bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/20"
-              >
-                <HelpCircle className="w-3.5 h-3.5" />
-                <span>How to Get Fresh Link</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setStreamUrl(PRESET_STREAMS[0].url);
-                  loadStream(PRESET_STREAMS[0].url);
-                }}
-                className="flex-1 md:flex-initial bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20"
-              >
-                <Play className="w-3.5 h-3.5 fill-white" />
-                <span>Play Working Test Stream</span>
-              </button>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-sm sm:text-base font-semibold text-white truncate tracking-tight">
+                {videoTitle}
+              </h1>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <span className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Video Stream
+                </span>
+                <span>•</span>
+                <span>{playbackSpeed !== 1.0 ? `${playbackSpeed}x` : "HD"}</span>
+              </div>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Fresh Link Help Modal */}
-      {showRefreshGuide && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                <RefreshCw className="w-4 h-4 text-amber-400" />
-                How to Solve PW Thor Link Expiration
-              </h3>
-              <button
-                onClick={() => setShowRefreshGuide(false)}
-                className="text-slate-400 hover:text-white text-lg leading-none cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs text-slate-300">
-              <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                <span className="font-bold text-amber-400">Step 1: Open Your PW Batch or Video</span>
-                <p className="text-slate-400">
-                  Go to your PW lecture, click on the lecture, and copy the stream link to generate a brand new active session token.
-                </p>
-              </div>
-
-              <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                <span className="font-bold text-emerald-400">Step 2: Paste Fresh Link in Web Player</span>
-                <p className="text-slate-400">
-                  Paste the fresh URL into the box above and tap <b>"Play & Probe Stream"</b>.
-                </p>
-              </div>
-
-              <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                <span className="font-bold text-indigo-400">Step 3: Save to Server (Never Expires)</span>
-                <p className="text-slate-400">
-                  Click <b>"📥 Save Permanently"</b> or send to Telegram bot <code className="text-indigo-300">@Aura_downlaoder_bot</code> to save the MP4 forever!
-                </p>
-              </div>
-            </div>
+          {/* Top Right Options */}
+          <div className="relative flex items-center gap-1.5 flex-shrink-0">
+            {/* Quick Landscape Button */}
+            <button
+              onClick={toggleLandscape}
+              className="p-2 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-all cursor-pointer flex items-center gap-1 text-xs font-medium"
+              title="Toggle Landscape Mode"
+            >
+              <Smartphone className="w-4 h-4 rotate-90 text-indigo-400" />
+              <span className="hidden sm:inline">Landscape</span>
+            </button>
 
             <button
-              onClick={() => setShowRefreshGuide(false)}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl text-xs cursor-pointer"
+              onClick={() => setShowMoreMenu(!showMoreMenu)}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors active:scale-95 cursor-pointer text-white"
+              title="More Options"
             >
-              Got It, Close
+              <MoreVertical className="w-5 h-5" />
             </button>
-          </div>
-        </div>
-      )}
 
-      {/* Keyboard Shortcuts Cheat Sheet Modal */}
-      {showKeybindsModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                <Keyboard className="w-4 h-4 text-indigo-400" />
-                Custom Pro Player Hotkeys & Shortcuts
-              </h3>
-              <button
-                onClick={() => setShowKeybindsModal(false)}
-                className="text-slate-400 hover:text-white text-lg leading-none cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Play / Pause</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-indigo-300">Space / K</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Hold to 2x Speed</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-amber-300">Hold Space</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Rewind 10s</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-cyan-300">J / ←</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Forward 10s</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-cyan-300">L / →</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Fullscreen</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-indigo-300">F</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Theater Mode</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-indigo-300">T</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Picture-in-Picture</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-indigo-300">P</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Mute / Unmute</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-indigo-300">M</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Add Note Bookmark</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-emerald-300">B</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                <span>Speed Up / Down</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-indigo-300">&gt; / &lt;</kbd>
-              </div>
-              <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between col-span-2">
-                <span>Jump to 0% – 90%</span>
-                <kbd className="px-2 py-0.5 bg-slate-800 rounded font-mono text-indigo-300">0, 1, 2 ... 9</kbd>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setShowKeybindsModal(false)}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-xl text-xs cursor-pointer"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Add Bookmark Note Modal */}
-      {showAddNoteModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                <Bookmark className="w-4 h-4 text-emerald-400" />
-                Add Lecture Note at {formatTime(currentTime)}
-              </h3>
-              <button
-                onClick={() => setShowAddNoteModal(false)}
-                className="text-slate-400 hover:text-white text-lg leading-none cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <textarea
-                value={newNoteText}
-                onChange={(e) => setNewNoteText(e.target.value)}
-                placeholder="e.g., Important derivation proof / Exam formula / Doubt timestamp..."
-                rows={3}
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                autoFocus
-              />
-              <div className="flex gap-2">
+            {/* Popover Menu */}
+            {showMoreMenu && (
+              <div className="absolute right-0 top-11 z-50 w-56 bg-slate-900/95 backdrop-blur-xl border border-slate-700 rounded-2xl p-1.5 shadow-2xl text-xs space-y-1 animate-fadeIn">
                 <button
-                  onClick={handleAddBookmark}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-xl text-xs cursor-pointer flex items-center justify-center gap-1.5"
+                  onClick={() => {
+                    toggleLandscape();
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/10 text-slate-200 transition-colors text-left"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  Save Note
+                  <Smartphone className="w-4 h-4 rotate-90 text-indigo-400" />
+                  <span>Toggle Landscape Mode</span>
                 </button>
+
                 <button
-                  onClick={() => setShowAddNoteModal(false)}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-xs cursor-pointer"
+                  onClick={() => {
+                    handleAutoFixExpiredStream();
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/10 text-slate-200 transition-colors text-left"
                 >
-                  Cancel
+                  <RefreshCw className="w-4 h-4 text-emerald-400" />
+                  <span>Auto-Fix & Play Expired Link</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleCopyLink();
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/10 text-slate-200 transition-colors text-left"
+                >
+                  {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-slate-400" />}
+                  <span>{copied ? "Link Copied!" : "Copy Stream URL"}</span>
+                </button>
+
+                <a
+                  href={`vlc://${streamUrl}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => setShowMoreMenu(false)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/10 text-slate-200 transition-colors text-left"
+                >
+                  <Tv className="w-4 h-4 text-amber-400" />
+                  <span>Open in VLC Player</span>
+                </a>
+
+                <button
+                  onClick={() => {
+                    setShowDownloadModal(true);
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-white/10 text-slate-200 transition-colors text-left"
+                >
+                  <Download className="w-4 h-4 text-indigo-400" />
+                  <span>Download Video (MP4)</span>
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Share Link Modal */}
-      {showShareModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                <Share2 className="w-4 h-4 text-indigo-400" />
-                Share Custom Web Player Link
-              </h3>
-              <button
-                onClick={() => setShowShareModal(false)}
-                className="text-slate-400 hover:text-white text-lg leading-none cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-400">
-              Anyone with this link can open and watch this stream in the custom Pro Player starting directly at <b className="text-indigo-300">{formatTime(currentTime)}</b>.
-            </p>
-
-            <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 p-2.5 rounded-xl">
-              <input
-                type="text"
-                readOnly
-                value={getShareablePlayerUrl()}
-                className="w-full bg-transparent text-xs font-mono text-slate-200 focus:outline-none"
-              />
-              <button
-                onClick={copyShareLink}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0 flex items-center gap-1 cursor-pointer"
-              >
-                {copiedShareLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedShareLink ? "Copied!" : "Copy"}</span>
-              </button>
-            </div>
-
-            <button
-              onClick={() => setShowShareModal(false)}
-              className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-2 rounded-xl text-xs cursor-pointer"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Mode Selector Tabs: Live Stream vs Permanent Video Storage */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setActiveTab("live")}
-            className={`text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-2 ${
-              activeTab === "live"
-                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
-                : "bg-slate-800/60 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-            }`}
-          >
-            <Radio className="w-4 h-4 text-indigo-300" />
-            <span>Live Stream Player & Prober</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("permanent")}
-            className={`text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-2 ${
-              activeTab === "permanent"
-                ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/25"
-                : "bg-slate-800/60 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-            }`}
-          >
-            <HardDrive className="w-4 h-4 text-emerald-300" />
-            <span>Permanent Video Cache ({storedVideos.length})</span>
-            {storedVideos.length > 0 && (
-              <span className="bg-emerald-400/20 text-emerald-300 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
-                0s Expiry
-              </span>
             )}
-          </button>
+          </div>
         </div>
+      )}
 
-        {/* Action Shortcuts & Keybinds Pill */}
-        <div className="flex items-center gap-2 text-xs">
+      {/* 
+        ========================================================================
+        CORE VIDEO PLAYER CONTAINER
+        ========================================================================
+      */}
+      <div
+        ref={playerContainerRef}
+        onMouseMove={resetControlsTimer}
+        onMouseLeave={() => isPlaying && setShowControls(false)}
+        onTouchStart={handleHoldStart}
+        onTouchEnd={handleHoldEnd}
+        onMouseDown={handleHoldStart}
+        onMouseUp={handleHoldEnd}
+        className={`relative w-full ${isLandscapeMode ? "h-screen w-screen max-w-none rounded-none" : "aspect-video rounded-b-2xl sm:rounded-b-3xl"} bg-black overflow-hidden shadow-2xl select-none group border border-slate-800`}
+      >
+        {/* Floating Exit Landscape Button */}
+        {isLandscapeMode && (
           <button
-            onClick={() => setShowKeybindsModal(true)}
-            className="hidden sm:flex items-center gap-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700/80 cursor-pointer transition-colors"
+            onClick={toggleLandscape}
+            className="absolute top-4 right-4 z-40 bg-black/80 hover:bg-black text-white px-3.5 py-1.5 rounded-full border border-white/20 text-xs font-bold flex items-center gap-1.5 shadow-xl transition-all active:scale-95 cursor-pointer backdrop-blur-md"
           >
-            <Keyboard className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Hotkeys</span>
+            <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Exit Landscape</span>
           </button>
+        )}
 
-          <button
-            onClick={() => setShowShareModal(true)}
-            className="flex items-center gap-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 px-3 py-1.5 rounded-xl border border-indigo-500/30 cursor-pointer transition-colors"
+        {/* HTML5 Video Element */}
+        <video
+          ref={videoRef}
+          playsInline
+          className="w-full h-full object-contain bg-black"
+          onClick={togglePlay}
+          onTouchEnd={handleTouchScreen}
+        />
+
+        {/* 2X Speed Indicator Badge */}
+        {isHolding2x && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-black/80 backdrop-blur-md px-3.5 py-1 rounded-full border border-white/20 text-white text-xs font-bold flex items-center gap-1.5 shadow-xl animate-pulse">
+            <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+            <span>2X SPEED ▶▶</span>
+          </div>
+        )}
+
+        {/* Double Tap Ripple Animations */}
+        {seekRipple === "forward" && (
+          <div className="absolute right-12 top-1/2 -translate-y-1/2 z-30 bg-white/20 backdrop-blur-md text-white p-4 rounded-full flex flex-col items-center gap-1 animate-ping pointer-events-none">
+            <RotateCw className="w-8 h-8" />
+            <span className="text-xs font-black">+10s</span>
+          </div>
+        )}
+
+        {seekRipple === "backward" && (
+          <div className="absolute left-12 top-1/2 -translate-y-1/2 z-30 bg-white/20 backdrop-blur-md text-white p-4 rounded-full flex flex-col items-center gap-1 animate-ping pointer-events-none">
+            <RotateCcw className="w-8 h-8" />
+            <span className="text-xs font-black">-10s</span>
+          </div>
+        )}
+
+        {/* Center Loading Spinner */}
+        {streamStatus === "loading" && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/50 backdrop-blur-xs pointer-events-none">
+            <div className="w-12 h-12 rounded-full border-4 border-white/20 border-t-white animate-spin"></div>
+            <span className="text-white text-xs font-medium mt-3 tracking-wide drop-shadow">
+              Connecting Video Stream...
+            </span>
+          </div>
+        )}
+
+        {/* Error Overlay with Auto-Fix Expired Stream Option */}
+        {streamStatus === "error" && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/90 p-6 text-center space-y-3">
+            <AlertTriangle className="w-10 h-10 text-amber-400 animate-bounce" />
+            <div className="max-w-md">
+              <h3 className="text-white font-bold text-sm sm:text-base">Stream Issue / Token Expired</h3>
+              <p className="text-slate-400 text-xs mt-1">
+                {streamError || "The video link could not be loaded directly."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 justify-center pt-2">
+              <button
+                onClick={handleAutoFixExpiredStream}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 cursor-pointer shadow-lg transition-all"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Auto-Fix & Play Expired Link</span>
+              </button>
+              <button
+                onClick={() => loadStream(PRESET_STREAMS[0].url)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold px-4 py-2 rounded-xl text-xs transition-all"
+              >
+                Play Sample Video
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Big Center Play Icon when Paused */}
+        {!isPlaying && streamStatus === "ready" && (
+          <div
+            onClick={togglePlay}
+            className="absolute inset-0 z-20 flex items-center justify-center bg-black/20 cursor-pointer"
           >
-            <Share2 className="w-3.5 h-3.5" />
-            <span>Share Link</span>
-          </button>
+            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 hover:bg-white/30 backdrop-blur-md flex items-center justify-center text-white border border-white/30 transition-transform active:scale-90 shadow-2xl">
+              <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-white text-white ml-1" />
+            </div>
+          </div>
+        )}
+
+        {/* 
+          ======================================================================
+          BOTTOM OVERLAY CONTROLS
+          ======================================================================
+        */}
+        <div
+          className={`absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/95 via-black/60 to-transparent pt-12 pb-3 px-3 sm:px-6 transition-opacity duration-300 ${
+            showControls ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
+        >
+          {/* 1. Time Display Row */}
+          <div className="flex items-center justify-between text-[11px] sm:text-xs font-semibold text-white/90 mb-1.5 px-0.5">
+            <div className="flex items-center gap-2">
+              <span className="font-mono">{formatTime(currentTime)}</span>
+              {playbackSpeed !== 1.0 && (
+                <span className="bg-white/20 text-white px-1.5 py-0.5 rounded text-[10px] font-bold">
+                  {playbackSpeed}x
+                </span>
+              )}
+            </div>
+            <span className="font-mono text-white/70">{formatTime(duration)}</span>
+          </div>
+
+          {/* 2. Scrubber Bar */}
+          <div className="relative w-full h-4 flex items-center mb-2 group/slider cursor-pointer">
+            {/* Background Track */}
+            <div className="absolute inset-x-0 h-1.5 bg-white/20 rounded-full overflow-hidden">
+              {/* Buffered Range */}
+              <div
+                className="h-full bg-white/40 transition-all"
+                style={{ width: `${bufferedPercent}%` }}
+              />
+            </div>
+
+            {/* Played Progress Bar */}
+            <div
+              className="absolute left-0 h-1.5 bg-indigo-500 rounded-full pointer-events-none"
+              style={{ width: `${progressPercent}%` }}
+            />
+
+            {/* HTML Input Range for Smooth Scrubbing */}
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={0.1}
+              value={progressPercent || 0}
+              onChange={handleSeekChange}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
+
+            {/* Scrub Thumb */}
+            <div
+              className="absolute w-3.5 h-3.5 rounded-full bg-white shadow-lg pointer-events-none -translate-x-1/2 transition-transform group-hover/slider:scale-125"
+              style={{ left: `${progressPercent}%` }}
+            />
+          </div>
+
+          {/* 3. Control Button Bar */}
+          <div className="flex items-center justify-between gap-1 sm:gap-2 text-white">
+            {/* Left controls */}
+            <div className="flex items-center gap-1 sm:gap-2">
+              {/* Play / Pause */}
+              <button
+                onClick={togglePlay}
+                className="p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer"
+                title={isPlaying ? "Pause" : "Play"}
+              >
+                {isPlaying ? (
+                  <Pause className="w-5 h-5 sm:w-6 sm:h-6 fill-white" />
+                ) : (
+                  <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
+                )}
+              </button>
+
+              {/* Rewind 10s */}
+              <button
+                onClick={() => seekRelative(-10)}
+                className="p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer relative"
+                title="Rewind 10s"
+              >
+                <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5" />
+                <span className="absolute inset-0 flex items-center justify-center text-[8px] font-black pointer-events-none pt-0.5">
+                  10
+                </span>
+              </button>
+
+              {/* Forward 10s */}
+              <button
+                onClick={() => seekRelative(10)}
+                className="p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer relative"
+                title="Forward 10s"
+              >
+                <RotateCw className="w-4 h-4 sm:w-5 sm:h-5" />
+                <span className="absolute inset-0 flex items-center justify-center text-[8px] font-black pointer-events-none pt-0.5">
+                  10
+                </span>
+              </button>
+
+              {/* Volume & Slider */}
+              <div
+                className="relative flex items-center"
+                onMouseEnter={() => setShowVolumeSlider(true)}
+                onMouseLeave={() => setShowVolumeSlider(false)}
+              >
+                <button
+                  onClick={toggleMute}
+                  className="p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer"
+                  title={isMuted ? "Unmute" : "Mute"}
+                >
+                  {isMuted || volume === 0 ? (
+                    <VolumeX className="w-5 h-5 sm:w-6 sm:h-6 text-red-400" />
+                  ) : volume < 0.5 ? (
+                    <Volume1 className="w-5 h-5 sm:w-6 sm:h-6" />
+                  ) : (
+                    <Volume2 className="w-5 h-5 sm:w-6 sm:h-6" />
+                  )}
+                </button>
+
+                {/* Popout Volume Slider */}
+                {showVolumeSlider && (
+                  <div className="hidden sm:flex items-center w-20 px-2 bg-slate-900/90 rounded-xl border border-white/10 h-8 ml-1 animate-fadeIn">
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={isMuted ? 0 : volume}
+                      onChange={handleVolumeChange}
+                      className="w-full accent-indigo-500 cursor-pointer h-1"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right controls */}
+            <div className="flex items-center gap-1 sm:gap-2">
+              {/* Landscape Button */}
+              <button
+                onClick={toggleLandscape}
+                className="p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer text-indigo-400"
+                title="Toggle Landscape / Auto-Rotate"
+              >
+                <Smartphone className="w-4 h-4 sm:w-5 sm:h-5 rotate-90" />
+              </button>
+
+              {/* Speed Button */}
+              <button
+                onClick={() => setShowSettingsModal(true)}
+                className="px-2.5 py-1.5 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer text-xs font-bold"
+                title="Playback Speed"
+              >
+                {playbackSpeed}x
+              </button>
+
+              {/* Download Button */}
+              <button
+                onClick={() => setShowDownloadModal(true)}
+                className="p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer text-indigo-300 hover:text-white"
+                title="Download Video (MP4)"
+              >
+                <Download className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+
+              {/* Settings Button */}
+              <button
+                onClick={() => setShowSettingsModal(true)}
+                className="p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer"
+                title="Quality & Speed Settings"
+              >
+                <Settings className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+
+              {/* PiP */}
+              <button
+                onClick={togglePiP}
+                className="hidden sm:block p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer"
+                title="Picture-in-Picture"
+              >
+                <PictureInPicture2 className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+
+              {/* Fullscreen */}
+              <button
+                onClick={toggleFullscreen}
+                className="p-2 hover:bg-white/20 rounded-xl transition-all active:scale-90 cursor-pointer"
+                title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              >
+                {isFullscreen ? (
+                  <Minimize className="w-5 h-5 sm:w-6 sm:h-6" />
+                ) : (
+                  <Maximize className="w-5 h-5 sm:w-6 sm:h-6" />
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* TAB 1: LIVE STREAM PLAYER */}
-      {activeTab === "live" && (
-        <div className="space-y-6">
-          {/* Preset Buttons */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold text-slate-400 flex items-center gap-1.5 mr-1">
-              <Zap className="w-3.5 h-3.5 text-amber-400" /> Quick Streams:
-            </span>
-            {PRESET_STREAMS.map((preset, idx) => (
-              <button
-                key={idx}
-                onClick={() => {
-                  setStreamUrl(preset.url);
-                  loadStream(preset.url);
-                }}
-                className={`text-xs px-3 py-1.5 rounded-xl border transition-all cursor-pointer flex items-center gap-1.5 ${
-                  streamUrl === preset.url
-                    ? "bg-indigo-600 border-indigo-400 text-white font-bold shadow-md shadow-indigo-500/20"
-                    : "bg-slate-800/80 border-slate-700 hover:bg-slate-700 text-slate-300"
-                }`}
-              >
-                <span>{preset.name}</span>
-              </button>
-            ))}
+      {/* 
+        ========================================================================
+        CLEAN ACTIONS BELOW PLAYER
+        ========================================================================
+      */}
+      {!isLandscapeMode && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Direct Download Action Button */}
+            <button
+              onClick={() => setShowDownloadModal(true)}
+              className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 px-4 rounded-2xl transition-all shadow-md active:scale-98 flex items-center justify-center gap-2 cursor-pointer text-xs sm:text-sm border border-slate-800"
+            >
+              <Download className="w-4 h-4 text-indigo-400" />
+              <span>Download Video (MP4)</span>
+            </button>
+
+            {/* Landscape Toggle Button */}
+            <button
+              onClick={toggleLandscape}
+              className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 px-4 rounded-2xl transition-all shadow-md active:scale-98 flex items-center justify-center gap-2 cursor-pointer text-xs sm:text-sm border border-slate-800"
+            >
+              <Smartphone className="w-4 h-4 text-indigo-400 rotate-90" />
+              <span>Landscape Mode</span>
+            </button>
+
+            {/* Copy Stream Link Button */}
+            <button
+              onClick={handleCopyLink}
+              className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 px-4 rounded-2xl transition-all shadow-md active:scale-98 flex items-center justify-center gap-2 cursor-pointer text-xs sm:text-sm border border-slate-800"
+            >
+              {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-slate-400" />}
+              <span>{copied ? "Link Copied!" : "Copy Stream URL"}</span>
+            </button>
           </div>
 
-          {/* Top Stream Input & Prober */}
-          <section className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-4 sm:p-5 shadow-xl backdrop-blur-xs">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-3">
+          {/* 
+            ========================================================================
+            PASTE STREAM URL FORM
+            ========================================================================
+          */}
+          <div className="bg-slate-900 rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-800 shadow-xl space-y-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-indigo-950 border border-indigo-800 flex items-center justify-center text-indigo-400">
+                <Play className="w-4 h-4 fill-indigo-400" />
+              </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-indigo-400" />
-                    ThorStream Custom Pro Player (16+ Features)
-                  </h2>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    Custom UI Active
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Ultra-fast HLS decrypt proxy with Hold to 2x speed, 200% Audio Gain Booster, A-B Loop, Ambilight & Lecture Bookmarks.
+                <h2 className="text-sm font-bold text-white">
+                  Play Any Stream Link
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Paste any .m3u8 or MP4 video URL below
                 </p>
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-center gap-2.5">
+            <form onSubmit={handlePlayInputUrl} className="flex flex-col sm:flex-row items-center gap-2">
               <input
                 type="text"
-                value={streamUrl}
-                onChange={(e) => setStreamUrl(e.target.value)}
-                placeholder="Enter https://.../master.m3u8 stream URL or .mp4 link..."
-                className="w-full flex-1 bg-slate-900/80 border border-slate-700 focus:border-indigo-500 rounded-xl px-4 py-2.5 text-xs sm:text-sm font-mono text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
+                value={inputUrl}
+                onChange={(e) => setInputUrl(e.target.value)}
+                placeholder="Paste video stream link here (https://...)"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs sm:text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-slate-900 transition-all font-mono"
               />
               <button
-                onClick={() => loadStream(streamUrl)}
-                className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-5 py-2.5 rounded-xl text-xs sm:text-sm shadow-lg shadow-indigo-500/20 transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center justify-center gap-1.5"
+                type="submit"
+                className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-6 py-2.5 rounded-xl text-xs sm:text-sm transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-indigo-600/20 flex-shrink-0 active:scale-95"
               >
-                <Play className="w-4 h-4 fill-white" />
-                Play & Probe
+                <Play className="w-3.5 h-3.5 fill-white" />
+                <span>Play</span>
               </button>
-              <button
-                onClick={() => setShowPacModal(true)}
-                className="w-full sm:w-auto bg-slate-900/90 hover:bg-cyan-950/80 text-cyan-300 border border-cyan-500/40 font-semibold px-4 py-2.5 rounded-xl text-xs sm:text-sm shadow-lg shadow-cyan-500/10 transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center justify-center gap-1.5"
-                title="Proxy Auto-Configuration: Inject cookies, spoof headers & bypass 403 Forbidden"
-              >
-                <ShieldCheck className="w-4 h-4 text-cyan-400" />
-                <span>PAC Helper</span>
-                {pacConfig.cookie && (
-                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-                )}
-              </button>
-              <button
-                onClick={handleSaveToPermanent}
-                disabled={isSavingPermanent}
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold px-4 py-2.5 rounded-xl text-xs sm:text-sm shadow-lg shadow-emerald-500/20 transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center justify-center gap-1.5"
-                title="Saves this video permanently to server so it never expires"
-              >
-                <Download className="w-4 h-4" />
-                <span>{isSavingPermanent ? "Saving..." : "Save Permanently"}</span>
-              </button>
-            </div>
+            </form>
 
-            {/* PAC Active / 403 Recovery Quick Banner */}
-            {showPac403Banner && (
-              <div className="mt-3 bg-cyan-950/50 border-2 border-cyan-500/50 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs animate-fade-in backdrop-blur-md">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
-                    <ShieldAlert className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <span className="font-bold text-cyan-200">
-                      403 Forbidden / CORS Restriction Detected
-                    </span>
-                    <p className="text-[11px] text-slate-300">
-                      Stream requires dynamic cookie injection or referer spoofing.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 w-full sm:w-auto">
+            {/* Quick Presets */}
+            <div className="pt-1">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">
+                Sample Streams:
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {PRESET_STREAMS.map((preset, idx) => (
                   <button
-                    onClick={() => setShowPacModal(true)}
-                    className="flex-1 sm:flex-initial px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1 shadow-md shadow-cyan-500/20 cursor-pointer"
+                    key={idx}
+                    onClick={() => {
+                      setStreamUrl(preset.url);
+                      loadStream(preset.url);
+                    }}
+                    className={`text-xs px-3 py-1 rounded-full border transition-all cursor-pointer font-medium ${
+                      streamUrl === preset.url
+                        ? "bg-indigo-600 text-white border-indigo-500"
+                        : "bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800"
+                    }`}
                   >
-                    <Settings className="w-3.5 h-3.5" />
-                    <span>Configure PAC & Cookies</span>
+                    {preset.name}
                   </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 
+            ========================================================================
+            SAVED / DOWNLOADED VIDEOS (IF ANY)
+            ========================================================================
+          */}
+          {storedVideos.length > 0 && (
+            <div className="bg-slate-900 rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-800 shadow-xl space-y-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-emerald-950 border border-emerald-800 flex items-center justify-center text-emerald-400">
+                  <CheckCircle2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-white">
+                    Downloaded Videos ({storedVideos.length})
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Offline files saved on server
+                  </p>
                 </div>
               </div>
-            )}
 
-            {savePermanentMsg && (
-              <div className="mt-3 text-xs font-semibold text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 p-2.5 rounded-xl flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>{savePermanentMsg}</span>
-              </div>
-            )}
-          </section>
-
-          {/* MAIN PRO VIDEO CANVAS & AMBILIGHT WRAPPER */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className={`${isTheaterMode ? "lg:col-span-12" : "lg:col-span-8"} space-y-4`}>
-              
-              {/* Ambilight Glowing Backdrop Container */}
-              <div className="relative">
-                {ambilightEnabled && (
-                  <div className="absolute -inset-1.5 bg-gradient-to-r from-indigo-500/25 via-cyan-500/20 to-purple-500/25 rounded-3xl blur-xl opacity-70 group-hover:opacity-100 transition-opacity -z-10"></div>
-                )}
-
-                {/* Custom Video Player Card (NO NATIVE CHROME CONTROLS) */}
-                <div
-                  ref={playerContainerRef}
-                  className="relative bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl select-none group"
-                  onMouseDown={(e) => {
-                    // Start Hold to 2x on long click (ignore right click)
-                    if (e.button === 0) {
-                      holdTimerRef.current = setTimeout(startHold2x, 250);
-                    }
-                  }}
-                  onMouseUp={() => {
-                    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
-                    if (isHolding2x) endHold2x();
-                  }}
-                  onTouchStart={() => {
-                    holdTimerRef.current = setTimeout(startHold2x, 250);
-                  }}
-                  onTouchEnd={() => {
-                    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
-                    if (isHolding2x) endHold2x();
-                  }}
-                >
-                  {/* Video Element */}
-                  <div className={`relative w-full bg-black flex items-center justify-center overflow-hidden ${getAspectRatioClass()}`}>
-                    <video
-                      ref={videoRef}
-                      className={`w-full h-full object-contain ${getVideoFilterClass()}`}
-                      onPlay={() => {
-                        setIsPlaying(true);
-                        setStreamStatus("ready");
-                      }}
-                      onPause={() => setIsPlaying(false)}
-                      onTimeUpdate={handleTimeUpdate}
-                      onLoadedData={() => setStreamStatus("ready")}
-                      onLoadedMetadata={() => setStreamStatus("ready")}
-                      onCanPlay={() => setStreamStatus("ready")}
-                      playsInline
-                    />
-
-                    {/* FEATURE: YouTube-Style Hold to 2x Speed Visual Banner */}
-                    {isHolding2x && (
-                      <div className="absolute top-4 inset-x-0 flex justify-center z-40 animate-bounce pointer-events-none">
-                        <div className="bg-amber-500/90 text-slate-950 font-black text-xs sm:text-sm px-4 py-1.5 rounded-full shadow-2xl flex items-center gap-2 backdrop-blur-md border border-amber-300">
-                          <Zap className="w-4 h-4 fill-slate-950" />
-                          <span>2X SPEED (Release to resume {previousSpeedBeforeHold}x)</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* FEATURE: Seek Ripple Feedback (+10s / -10s) */}
-                    {seekRipple && (
-                      <div
-                        className={`absolute inset-y-0 ${
-                          seekRipple.type === "forward" ? "right-0 w-1/2" : "left-0 w-1/2"
-                        } flex items-center justify-center bg-white/10 z-30 pointer-events-none transition-opacity duration-500`}
-                      >
-                        <div className="bg-slate-950/80 text-cyan-300 border border-cyan-500/30 px-4 py-2 rounded-2xl font-bold font-mono text-sm flex items-center gap-2 backdrop-blur-md shadow-2xl">
-                          {seekRipple.type === "forward" ? (
-                            <>
-                              <span>+10s</span>
-                              <RotateCw className="w-5 h-5" />
-                            </>
-                          ) : (
-                            <>
-                              <RotateCcw className="w-5 h-5" />
-                              <span>-10s</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Double-Click Seek Interaction Zones */}
-                    <div
-                      className="absolute inset-y-0 left-0 w-1/3 cursor-pointer z-10"
-                      onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        skipSeconds(-10);
-                      }}
-                    />
-                    <div
-                      className="absolute inset-y-0 right-0 w-1/3 cursor-pointer z-10"
-                      onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        skipSeconds(10);
-                      }}
-                    />
-                    <div
-                      className="absolute inset-0 cursor-pointer z-0"
-                      onClick={togglePlay}
-                    />
-
-                    {/* Center Big Play Button when paused */}
-                    {!isPlaying && (
-                      <div
-                        onClick={togglePlay}
-                        className="absolute inset-0 flex items-center justify-center bg-black/40 cursor-pointer transition-opacity z-20"
-                      >
-                        <button
-                          aria-label="Play video"
-                          className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center shadow-2xl shadow-indigo-500/50 transform hover:scale-110 active:scale-95 transition-all cursor-pointer"
-                        >
-                          <Play className="w-8 h-8 sm:w-10 sm:h-10 ml-1 fill-white" />
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Unmute Prompt Banner */}
-                    {isPlaying && isMuted && (
-                      <button
-                        onClick={toggleMute}
-                        className="absolute top-3 right-3 z-30 bg-slate-900/90 hover:bg-indigo-600 text-white text-xs font-semibold px-3 py-1.5 rounded-full border border-slate-700 shadow-lg flex items-center gap-1.5 backdrop-blur-xs transition-colors cursor-pointer"
-                      >
-                        <VolumeX className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Tap to Unmute 🔊</span>
-                      </button>
-                    )}
-
-                    {/* Quick Landscape Floating Toggle (Mobile/Desktop) */}
-                    <button
-                      onClick={toggleLandscape}
-                      className="absolute top-3 left-3 z-30 bg-slate-900/85 hover:bg-indigo-600 text-slate-200 hover:text-white text-xs font-semibold px-2.5 py-1.5 rounded-xl border border-slate-700/80 shadow-lg flex items-center gap-1.5 backdrop-blur-xs transition-all cursor-pointer"
-                      title="Force Landscape Orientation (O)"
-                    >
-                      <Tv className="w-3.5 h-3.5 text-indigo-400" />
-                      <span className="text-[11px]">{isLandscape ? "Portrait" : "Landscape Mod"}</span>
-                    </button>
-
-                    {/* Sleep Timer Countdown Badge */}
-                    {sleepTimerRemaining !== null && (
-                      <div className="absolute top-3 left-3 z-30 bg-slate-900/90 text-cyan-300 text-[11px] font-mono font-bold px-2.5 py-1 rounded-full border border-cyan-500/30 flex items-center gap-1.5">
-                        <Clock className="w-3 h-3 text-cyan-400 animate-spin" />
-                        <span>Sleep: {formatTime(sleepTimerRemaining)}</span>
-                      </div>
-                    )}
-
-                    {/* A-B Loop Indicator Badge */}
-                    {isLoopActive && loopA !== null && loopB !== null && (
-                      <div className="absolute top-12 left-3 z-30 bg-purple-900/80 text-purple-200 text-[11px] font-mono font-bold px-2.5 py-1 rounded-full border border-purple-500/30 flex items-center gap-1.5">
-                        <Repeat className="w-3 h-3 text-purple-300 animate-pulse" />
-                        <span>Loop: {formatTime(loopA)} ⇄ {formatTime(loopB)}</span>
-                      </div>
-                    )}
-
-                    {/* Error Banner */}
-                    {streamStatus === "error" && (
-                      <div className="absolute inset-0 bg-slate-950/95 p-6 flex flex-col items-center justify-center text-center gap-3 z-30">
-                        <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                          <ShieldAlert className="w-6 h-6" />
-                        </div>
-                        <h4 className="text-sm font-bold text-slate-100">Stream Connection Notice</h4>
-                        <p className="text-xs text-slate-400 max-w-md">
-                          {streamError || "PW Thor token expired. Please fetch a fresh link from PW batch or play the permanent test stream."}
-                        </p>
-                        <div className="flex flex-wrap gap-2 mt-2 justify-center">
-                          <button
-                            onClick={() => {
-                              setStreamUrl(PRESET_STREAMS[0].url);
-                              loadStream(PRESET_STREAMS[0].url);
-                            }}
-                            className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-500/20"
-                          >
-                            <Play className="w-3.5 h-3.5 fill-white" />
-                            Play Working Test Stream
-                          </button>
-                          <button
-                            onClick={() => setShowRefreshGuide(true)}
-                            className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <HelpCircle className="w-3.5 h-3.5" />
-                            How to Refresh Link
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* CUSTOM SLEEK BOTTOM CONTROLS OVERLAY */}
-                    <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-950 via-slate-950/85 to-transparent p-3 sm:p-4 flex flex-col gap-2.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200 z-30">
-                      
-                      {/* Timeline Seek Bar */}
-                      <div
-                        onClick={handleSeek}
-                        className="relative w-full h-3 flex items-center cursor-pointer group/bar"
-                      >
-                        <div className="w-full bg-slate-700/60 rounded-full h-1.5 group-hover/bar:h-2 transition-all overflow-hidden relative">
-                          {/* Progress fill */}
-                          <div
-                            className="bg-gradient-to-r from-indigo-500 to-cyan-400 h-full rounded-full transition-all duration-75 relative"
-                            style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
-                          />
-                          {/* A-B Loop highlight on timeline */}
-                          {loopA !== null && loopB !== null && duration > 0 && (
-                            <div
-                              className="absolute top-0 bottom-0 bg-purple-500/40 border-x border-purple-300"
-                              style={{
-                                left: `${(loopA / duration) * 100}%`,
-                                width: `${((loopB - loopA) / duration) * 100}%`
-                              }}
-                            />
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Main Controls Row */}
-                      <div className="flex items-center justify-between gap-2">
-                        
-                        {/* Left Group: Play/Pause, Skips, Volume + 200% Booster */}
-                        <div className="flex items-center gap-2 sm:gap-3">
-                          {/* Play/Pause */}
-                          <button
-                            onClick={togglePlay}
-                            className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center cursor-pointer transition-colors shadow-sm"
-                            title={isPlaying ? "Pause (Space/K)" : "Play (Space/K)"}
-                          >
-                            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5 fill-white" />}
-                          </button>
-
-                          {/* Skip -10s */}
-                          <button
-                            onClick={() => skipSeconds(-10)}
-                            className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg cursor-pointer transition-colors"
-                            title="Rewind 10s (J)"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                          </button>
-
-                          {/* Skip +10s */}
-                          <button
-                            onClick={() => skipSeconds(10)}
-                            className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg cursor-pointer transition-colors"
-                            title="Forward 10s (L)"
-                          >
-                            <RotateCw className="w-4 h-4" />
-                          </button>
-
-                          {/* Volume & 200% Booster */}
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={toggleMute}
-                              className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg cursor-pointer transition-colors"
-                              title="Mute/Unmute (M)"
-                            >
-                              {isMuted || volume === 0 ? (
-                                <VolumeX className="w-4 h-4 text-red-400" />
-                              ) : volumeBoost > 100 ? (
-                                <Volume2 className="w-4 h-4 text-amber-400 animate-pulse" />
-                              ) : (
-                                <Volume1 className="w-4 h-4" />
-                              )}
-                            </button>
-                            <input
-                              type="range"
-                              min="0"
-                              max="1"
-                              step="0.05"
-                              value={isMuted ? 0 : volume}
-                              onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                              className="w-14 sm:w-18 accent-indigo-500 h-1 bg-slate-700 rounded-lg cursor-pointer hidden sm:block"
-                            />
-                            {/* Volume Boost Toggle */}
-                            <button
-                              onClick={() => {
-                                initAudioBooster();
-                                setVolumeBoost((prev) => (prev === 100 ? 150 : prev === 150 ? 200 : 100));
-                              }}
-                              className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border transition-colors cursor-pointer hidden sm:block ${
-                                volumeBoost > 100
-                                  ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
-                                  : "bg-slate-800 text-slate-400 border-slate-700"
-                              }`}
-                              title="Audio Gain Booster (Amplifies low lecture audio up to 200%)"
-                            >
-                              {volumeBoost}%
-                            </button>
-                          </div>
-
-                          {/* Time Indicator */}
-                          <div className="text-[11px] font-mono text-slate-300">
-                            <span>{formatTime(currentTime)}</span>
-                            <span className="text-slate-500 mx-1">/</span>
-                            <span>{duration > 0 ? formatTime(duration) : "Live"}</span>
-                          </div>
-                        </div>
-
-                        {/* Right Group: Quality, Aspect, Bookmark, PiP, Theater, Fullscreen */}
-                        <div className="flex items-center gap-1.5 sm:gap-2">
-                          
-                          {/* Quality Level Selector */}
-                          <div className="flex items-center gap-1 bg-slate-900/90 border border-slate-700 rounded-lg px-2 py-1 text-xs">
-                            <Sliders className="w-3 h-3 text-indigo-400" />
-                            <select
-                              value={currentLevel}
-                              onChange={(e) => handleLevelChange(parseInt(e.target.value, 10))}
-                              className="bg-transparent text-slate-200 text-xs font-semibold focus:outline-none cursor-pointer"
-                            >
-                              <option value="-1" className="bg-slate-900 text-slate-200">⚡ Auto HD</option>
-                              {levels.map((lvl) => (
-                                <option key={lvl.id} value={lvl.id} className="bg-slate-900 text-slate-200">
-                                  {lvl.label}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          {/* PAC Helper Button in Controls */}
-                          <button
-                            onClick={() => setShowPacModal(true)}
-                            className="p-1.5 text-cyan-300 hover:text-white hover:bg-cyan-500/20 rounded-lg cursor-pointer transition-colors"
-                            title="Proxy Auto-Configuration (PAC 403 Shield)"
-                          >
-                            <ShieldCheck className="w-4 h-4 text-cyan-400" />
-                          </button>
-
-                          {/* Add Bookmark Note Button */}
-                          <button
-                            onClick={() => setShowAddNoteModal(true)}
-                            className="p-1.5 text-slate-300 hover:text-emerald-400 hover:bg-white/10 rounded-lg cursor-pointer transition-colors"
-                            title="Add Bookmark Note (B)"
-                          >
-                            <Bookmark className="w-4 h-4" />
-                          </button>
-
-                          {/* PiP Button */}
-                          <button
-                            onClick={togglePiP}
-                            className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
-                              isPiPActive ? "text-indigo-400 bg-indigo-500/20" : "text-slate-300 hover:text-white hover:bg-white/10"
-                            }`}
-                            title="Picture-in-Picture (P)"
-                          >
-                            <PictureInPicture2 className="w-4 h-4" />
-                          </button>
-
-                          {/* Theater Mode Button */}
-                          <button
-                            onClick={() => setIsTheaterMode((prev) => !prev)}
-                            className={`p-1.5 rounded-lg cursor-pointer transition-colors hidden sm:block ${
-                              isTheaterMode ? "text-cyan-400 bg-cyan-500/20" : "text-slate-300 hover:text-white hover:bg-white/10"
-                            }`}
-                            title="Theater Mode (T)"
-                          >
-                            <Film className="w-4 h-4" />
-                          </button>
-
-                          {/* Landscape Mode Button */}
-                          <button
-                            onClick={toggleLandscape}
-                            className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
-                              isLandscape ? "text-indigo-400 bg-indigo-500/20" : "text-slate-300 hover:text-white hover:bg-white/10"
-                            }`}
-                            title="Landscape Mode (O)"
-                          >
-                            <Tv className="w-4 h-4" />
-                          </button>
-
-                          {/* Fullscreen Button */}
-                          <button
-                            onClick={toggleFullscreen}
-                            className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg cursor-pointer transition-colors"
-                            title="Fullscreen (F)"
-                          >
-                            <Maximize className="w-4 h-4" />
-                          </button>
-                        </div>
-
+              <div className="divide-y divide-slate-800">
+                {storedVideos.map((video) => (
+                  <div key={video.fileId} className="py-2.5 flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-xs sm:text-sm font-semibold text-slate-200 truncate">
+                        {video.filename}
+                      </h3>
+                      <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                        <span>{video.fileSizeMB} MB</span>
+                        <span>•</span>
+                        <span>{video.quality}</span>
+                        <span>•</span>
+                        <span>{video.duration}</span>
                       </div>
                     </div>
-                  </div>
-                </div>
-              </div>
 
-              {/* QUICK PRO TOOLBAR: Speed, A-B Loop, Video Filters, Aspect Ratio & Sleep Timer */}
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3 backdrop-blur-xs">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  
-                  {/* Speed Controls */}
-                  <div className="flex items-center space-x-1.5 bg-slate-950/80 border border-slate-800 rounded-xl p-1 text-xs">
-                    <span className="text-slate-400 px-2 font-medium flex items-center gap-1">
-                      <Gauge className="w-3.5 h-3.5 text-indigo-400" /> Speed:
-                    </span>
-                    {[0.75, 1.0, 1.25, 1.5, 2.0, 2.5].map((spd) => (
-                      <button
-                        key={spd}
-                        onClick={() => setSpeed(spd)}
-                        className={`px-2 py-1 rounded font-mono transition-all cursor-pointer ${
-                          playbackSpeed === spd
-                            ? "bg-indigo-600 text-white font-bold"
-                            : "text-slate-300 hover:bg-slate-800"
-                        }`}
-                      >
-                        {spd}x
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Aspect Ratio Switcher */}
-                  <div className="flex items-center space-x-1 bg-slate-950/80 border border-slate-800 rounded-xl p-1 text-xs">
-                    <span className="text-slate-400 px-2 font-medium">Aspect:</span>
-                    {(["16:9", "4:3", "cover", "contain"] as const).map((asp) => (
-                      <button
-                        key={asp}
-                        onClick={() => setAspectRatio(asp)}
-                        className={`px-2 py-1 rounded transition-all cursor-pointer uppercase text-[10px] font-bold ${
-                          aspectRatio === asp
-                            ? "bg-cyan-600 text-white font-bold"
-                            : "text-slate-400 hover:bg-slate-800"
-                        }`}
-                      >
-                        {asp}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Video Filter (Eye Care / Night Mode) */}
-                  <div className="flex items-center space-x-1 bg-slate-950/80 border border-slate-800 rounded-xl p-1 text-xs">
-                    <span className="text-slate-400 px-2 font-medium flex items-center gap-1">
-                      <Eye className="w-3.5 h-3.5 text-emerald-400" /> Filter:
-                    </span>
-                    {(["normal", "night", "warm", "contrast", "invert"] as const).map((flt) => (
-                      <button
-                        key={flt}
-                        onClick={() => setVideoFilter(flt)}
-                        className={`px-2 py-1 rounded transition-all cursor-pointer capitalize text-[10px] font-semibold ${
-                          videoFilter === flt
-                            ? "bg-emerald-600 text-white"
-                            : "text-slate-400 hover:bg-slate-800"
-                        }`}
-                      >
-                        {flt}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Secondary Row: A-B Loop & Sleep Timer */}
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800 text-xs">
-                  {/* A-B Loop Controls */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-400 flex items-center gap-1">
-                      <Repeat className="w-3.5 h-3.5 text-purple-400" /> A-B Loop:
-                    </span>
-                    <button
-                      onClick={() => setLoopA(currentTime)}
-                      className={`px-2 py-1 rounded-lg border font-mono cursor-pointer ${
-                        loopA !== null ? "bg-purple-600/30 border-purple-500 text-purple-200 font-bold" : "bg-slate-950 border-slate-800 text-slate-400"
-                      }`}
-                    >
-                      A: {loopA !== null ? formatTime(loopA) : "Set Start"}
-                    </button>
-                    <button
-                      onClick={() => setLoopB(currentTime)}
-                      className={`px-2 py-1 rounded-lg border font-mono cursor-pointer ${
-                        loopB !== null ? "bg-purple-600/30 border-purple-500 text-purple-200 font-bold" : "bg-slate-950 border-slate-800 text-slate-400"
-                      }`}
-                    >
-                      B: {loopB !== null ? formatTime(loopB) : "Set End"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (loopA !== null && loopB !== null && loopA < loopB) {
-                          setIsLoopActive((prev) => !prev);
-                        }
-                      }}
-                      disabled={loopA === null || loopB === null || loopA >= loopB}
-                      className={`px-2.5 py-1 rounded-lg font-semibold cursor-pointer disabled:opacity-40 transition-colors ${
-                        isLoopActive ? "bg-purple-600 text-white font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
-                      }`}
-                    >
-                      {isLoopActive ? "Looping On" : "Start Loop"}
-                    </button>
-                    {(loopA !== null || loopB !== null) && (
+                    <div className="flex items-center gap-2">
                       <button
                         onClick={() => {
-                          setLoopA(null);
-                          setLoopB(null);
-                          setIsLoopActive(false);
+                          setStreamUrl(video.streamUrl);
+                          setVideoTitle(video.filename);
+                          loadStream(video.streamUrl);
+                          window.scrollTo({ top: 0, behavior: "smooth" });
                         }}
-                        className="text-slate-500 hover:text-red-400 cursor-pointer p-1"
-                        title="Clear Loop"
+                        className="bg-slate-800 hover:bg-indigo-900 text-slate-200 hover:text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                       >
-                        ✕
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <span>Play</span>
                       </button>
-                    )}
+                      <a
+                        href={video.downloadUrl}
+                        download={video.filename}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Save</span>
+                      </a>
+                    </div>
                   </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
-                  {/* Sleep Timer Preset */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-slate-400 flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-cyan-400" /> Sleep Timer:
-                    </span>
-                    {[15, 30, 60].map((mins) => (
-                      <button
-                        key={mins}
-                        onClick={() => setSleepTimer(sleepTimerMinutes === mins ? null : mins)}
-                        className={`px-2 py-1 rounded-lg font-mono cursor-pointer ${
-                          sleepTimerMinutes === mins
-                            ? "bg-cyan-600 text-white font-bold"
-                            : "bg-slate-950 border border-slate-800 text-slate-400 hover:bg-slate-800"
-                        }`}
-                      >
-                        {mins}m
-                      </button>
-                    ))}
-                    {sleepTimerMinutes !== null && (
-                      <button
-                        onClick={() => setSleepTimer(null)}
-                        className="text-slate-500 hover:text-red-400 cursor-pointer p-1"
-                        title="Cancel Timer"
-                      >
-                        ✕
-                      </button>
+      {/* 
+        ========================================================================
+        HIGH-SPEED LIVE DOWNLOAD MODAL (NO MORE PENDING / 00 MB)
+        ========================================================================
+      */}
+      {showDownloadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl border border-slate-800 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-950 border border-indigo-800 text-indigo-400 flex items-center justify-center">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Download Video</h3>
+                  <p className="text-xs text-slate-400 truncate max-w-[220px]">{videoTitle}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDownloadModal(false)}
+                className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Active Download Progress Card (If in progress) */}
+            {activeDownloadJob ? (
+              <div className="bg-slate-950 rounded-2xl p-4 border border-slate-800 space-y-3 animate-fadeIn">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                    {activeDownloadJob.status === "completed" ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    ) : (
+                      <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
                     )}
-                  </div>
+                    <span>
+                      {activeDownloadJob.status === "completed"
+                        ? "Download Complete!"
+                        : `Downloading ${activeDownloadJob.quality}...`}
+                    </span>
+                  </span>
+                  <span className="text-xs font-mono font-bold text-indigo-400">
+                    {activeDownloadJob.percentage.toFixed(1)}%
+                  </span>
                 </div>
 
+                {/* Progress Bar */}
+                <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 transition-all duration-300"
+                    style={{ width: `${Math.min(100, activeDownloadJob.percentage)}%` }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                  <span>{activeDownloadJob.downloadedMB.toFixed(1)} MB / {activeDownloadJob.totalSize}</span>
+                  <span>{activeDownloadJob.speed}</span>
+                </div>
+
+                {activeDownloadJob.status === "completed" && activeDownloadJob.downloadUrl && (
+                  <a
+                    href={activeDownloadJob.downloadUrl}
+                    download={`${videoTitle}.mp4`}
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>💾 Save Finished Video (.mp4)</span>
+                  </a>
+                )}
+              </div>
+            ) : (
+              /* Quality Selection List */
+              <div className="space-y-2">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  Select Video Quality:
+                </span>
+
+                {[
+                  { label: "⚡ Fast Download (Full Video)", quality: "auto", desc: "Best multi-thread high speed" },
+                  { label: "🎬 1080p Full HD", quality: "1080", desc: "High clarity video & audio" },
+                  { label: "📱 720p HD", quality: "720", desc: "Balanced size & quality" },
+                  { label: "⚡ 480p Standard", quality: "480", desc: "Optimized for mobile data" },
+                  { label: "📶 360p Data Saver", quality: "360", desc: "Small file size" }
+                ].map((opt) => (
+                  <button
+                    key={opt.quality}
+                    disabled={isStartingDownload}
+                    onClick={() => startLiveDownload(opt.quality)}
+                    className="w-full flex items-center justify-between p-3 rounded-2xl bg-slate-950 border border-slate-800 hover:border-indigo-500 hover:bg-slate-800 transition-all group cursor-pointer text-left"
+                  >
+                    <div>
+                      <span className="text-xs sm:text-sm font-bold text-white group-hover:text-indigo-400 block">
+                        {opt.label}
+                      </span>
+                      <span className="text-[11px] text-slate-400">{opt.desc}</span>
+                    </div>
+                    <Download className="w-4 h-4 text-slate-400 group-hover:text-indigo-400" />
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+              <span>Direct high speed output</span>
+              <button
+                onClick={() => setShowDownloadModal(false)}
+                className="font-bold text-slate-300 hover:text-white cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 
+        ========================================================================
+        SETTINGS MODAL (QUALITY & SPEED)
+        ========================================================================
+      */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 rounded-3xl p-5 sm:p-6 max-w-sm w-full shadow-2xl border border-slate-800 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-slate-800 text-white flex items-center justify-center">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-bold text-white">Player Settings</h3>
+              </div>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quality Section */}
+            <div className="space-y-2">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                Video Resolution
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => changeQuality(-1)}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    currentLevel === -1
+                      ? "bg-indigo-600 text-white"
+                      : "bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                  }`}
+                >
+                  Auto Quality
+                </button>
+                {levels.map((lvl) => (
+                  <button
+                    key={lvl.id}
+                    onClick={() => changeQuality(lvl.id)}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      currentLevel === lvl.id
+                        ? "bg-indigo-600 text-white"
+                        : "bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                    }`}
+                  >
+                    {lvl.label}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* SIDEBAR: Lecture Notes & Bookmarks + Diagnostic Tools */}
-            <div className={`${isTheaterMode ? "lg:col-span-12" : "lg:col-span-4"} space-y-5`}>
-              
-              {/* Lecture Notes & Bookmarks Card */}
-              <section className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 shadow-xl space-y-3 backdrop-blur-xs">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-700/60">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                    <Bookmark className="w-4 h-4 text-emerald-400" />
-                    <span>Lecture Notes ({bookmarks.length})</span>
-                  </h3>
-                  {bookmarks.length > 0 && (
-                    <button
-                      onClick={handleExportNotes}
-                      className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 cursor-pointer"
-                    >
-                      <Download className="w-3 h-3" />
-                      <span>Export MD</span>
-                    </button>
-                  )}
-                </div>
-
-                <div className="max-h-56 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                  {bookmarks.length === 0 ? (
-                    <div className="text-center py-6 text-slate-500 text-xs space-y-2">
-                      <FileText className="w-8 h-8 mx-auto opacity-30" />
-                      <p>No timestamp notes yet.</p>
-                      <button
-                        onClick={() => setShowAddNoteModal(true)}
-                        className="bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs px-3 py-1.5 rounded-lg border border-slate-700 cursor-pointer"
-                      >
-                        + Add Note at {formatTime(currentTime)}
-                      </button>
-                    </div>
-                  ) : (
-                    bookmarks.map((bm) => (
-                      <div
-                        key={bm.id}
-                        className="bg-slate-900/90 border border-slate-800 p-2.5 rounded-xl flex items-start justify-between gap-2 hover:border-emerald-500/40 transition-colors"
-                      >
-                        <div
-                          className="flex-1 cursor-pointer"
-                          onClick={() => {
-                            if (videoRef.current) {
-                              videoRef.current.currentTime = bm.time;
-                            }
-                          }}
-                        >
-                          <span className="text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-500/30 mr-2">
-                            {bm.formattedTime}
-                          </span>
-                          <span className="text-xs text-slate-200">{bm.note}</span>
-                        </div>
-                        <button
-                          onClick={() => handleDeleteBookmark(bm.id)}
-                          className="text-slate-500 hover:text-red-400 p-1 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </section>
-
-              {/* Stream Diagnostic & Token Status Card */}
-              <section className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 shadow-xl space-y-3 backdrop-blur-xs">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-                  <span>Stream Diagnostic</span>
-                  <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold ${
-                    streamHealth.status === "active"
-                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                      : streamHealth.status === "expired"
-                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                      : "bg-blue-500/20 text-blue-300 border border-blue-500/30"
-                  }`}>
-                    {streamHealth.status.toUpperCase()}
-                  </span>
-                </h3>
-
-                <div className="space-y-2 text-xs">
-                  <div className="flex items-center justify-between text-slate-300 bg-slate-900/80 p-2 rounded-lg">
-                    <span className="text-slate-500">HTTP Status:</span>
-                    <span className="font-mono font-bold text-slate-200">{streamHealth.httpStatus || 200} OK</span>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-300 bg-slate-900/80 p-2 rounded-lg">
-                    <span className="text-slate-500">Audio Booster:</span>
-                    <span className="font-mono font-bold text-amber-400">{volumeBoost}% Gain</span>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-300 bg-slate-900/80 p-2 rounded-lg">
-                    <span className="text-slate-500">VLC / MX URL:</span>
-                    <button
-                      onClick={copyVlcLink}
-                      className="text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer flex items-center gap-1"
-                    >
-                      {copiedVlc ? "Copied!" : "Copy URL"}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-slate-700/60 flex gap-2">
+            {/* Speed Section */}
+            <div className="space-y-2">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                Playback Speed
+              </span>
+              <div className="grid grid-cols-4 gap-1.5">
+                {[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5].map((spd) => (
                   <button
-                    onClick={copyFfmpegCmd}
-                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-2 rounded-xl border border-slate-700 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    key={spd}
+                    onClick={() => changeSpeed(spd)}
+                    className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      playbackSpeed === spd
+                        ? "bg-indigo-600 text-white"
+                        : "bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                    }`}
                   >
-                    {copiedCmd ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>1000x FFmpeg</span>
+                    {spd}x
                   </button>
-                  <a
-                    href="https://t.me/Aura_downlaoder_bot"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-2 rounded-xl transition-all shadow-md shadow-indigo-500/20 flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Bot</span>
-                  </a>
-                </div>
-              </section>
-
+                ))}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* TAB 2: PERMANENT VIDEO VAULT */}
-      {activeTab === "permanent" && (
-        <div className="space-y-4">
-          <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 shadow-xl flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                <HardDrive className="w-5 h-5 text-emerald-400" />
-                Permanent Server Video Vault
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Videos saved here NEVER expire. You can stream instantly online or download the full MP4 to your device.
-              </p>
-            </div>
             <button
-              onClick={fetchStoredVideos}
-              className="bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-700 flex items-center gap-1.5 cursor-pointer"
+              onClick={() => setShowSettingsModal(false)}
+              className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 rounded-2xl text-xs cursor-pointer transition-all"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Refresh Vault</span>
+              Done
             </button>
           </div>
-
-          {storedVideos.length === 0 ? (
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-12 text-center space-y-3">
-              <Film className="w-12 h-12 text-slate-600 mx-auto" />
-              <h4 className="text-sm font-bold text-slate-300">No Permanently Saved Videos Yet</h4>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Paste any live lecture link in the Live Stream Player tab and click <b>"Save Permanently"</b> to store it forever on the server.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {storedVideos.map((vid) => (
-                <div
-                  key={vid.fileId}
-                  className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/50 rounded-2xl p-4 shadow-xl flex flex-col justify-between space-y-3 transition-colors"
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                        {vid.quality || "1080p HD"}
-                      </span>
-                      <span className="text-xs font-mono text-slate-400">{vid.fileSizeMB} MB</span>
-                    </div>
-                    <h4 className="text-sm font-bold text-slate-100 line-clamp-2">{vid.filename}</h4>
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setStreamUrl(vid.streamUrl);
-                        setActiveTab("live");
-                        loadStream(vid.streamUrl);
-                      }}
-                      className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs py-2 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-indigo-600/20"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-white" />
-                      <span>Play in App</span>
-                    </button>
-                    <a
-                      href={vid.downloadUrl}
-                      download
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs p-2 rounded-xl border border-slate-700 cursor-pointer"
-                      title="Download MP4"
-                    >
-                      <Download className="w-4 h-4" />
-                    </a>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
-
-      {/* Proxy Auto-Configuration (PAC) Helper Modal */}
-      <ProxyConfigModal
-        isOpen={showPacModal}
-        onClose={() => setShowPacModal(false)}
-        streamUrl={streamUrl}
-        pacConfig={pacConfig}
-        onSavePacConfig={handleSavePacConfig}
-      />
-
     </div>
   );
 };

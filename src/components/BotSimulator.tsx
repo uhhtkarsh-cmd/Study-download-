@@ -1,5 +1,27 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { Send, Play, FastForward, CheckCircle2, RefreshCw, Terminal, Copy, Check, Zap, ExternalLink, Activity, Radio, Cpu, Power, Download, Video, ShieldCheck, TrendingUp, Gauge, Wifi, Layers } from "lucide-react";
+import {
+  Send,
+  Play,
+  CheckCircle2,
+  RefreshCw,
+  Terminal,
+  Copy,
+  Check,
+  Zap,
+  ExternalLink,
+  Activity,
+  Radio,
+  Download,
+  Video,
+  ShieldCheck,
+  TrendingUp,
+  Layers,
+  Sparkles,
+  Server,
+  Trash2,
+  ListPlus,
+  PlayCircle
+} from "lucide-react";
 import { BOT_CONFIG_DEFAULTS } from "../data/botFiles";
 
 interface ChatMessage {
@@ -27,109 +49,77 @@ interface ServerBotLog {
   message: string;
 }
 
-interface ActiveTask {
+export interface ParallelDownloadJob {
   id: string;
-  chatId: number;
-  username?: string;
   title: string;
   url: string;
+  progress: number;
   downloadedMB: number;
-  percentage?: number;
-  speed: string;
-  duration?: string;
-  totalDuration?: string;
+  totalMB: number;
+  speedMBs: number;
+  threads: number;
   status: "downloading" | "remuxing" | "uploading" | "completed" | "error";
+  statusText: string;
+  activeSockets: number[];
   startTime: number;
-  totalSize?: string;
+  thumbUrl?: string;
+  duration?: string;
 }
 
-// Custom Real-Time Speed Monitoring Hook
 interface SpeedPoint {
   time: number;
   speedMBs: number;
 }
 
-function useSpeedMonitor(isActive: boolean, activeTasks: ActiveTask[]) {
-  const [speedHistory, setSpeedHistory] = useState<SpeedPoint[]>(() => 
-    Array.from({ length: 20 }, (_, i) => ({ time: Date.now() - (20 - i) * 500, speedMBs: 0 }))
-  );
-  const [currentSpeedMBs, setCurrentSpeedMBs] = useState<number>(0);
-  const [peakSpeedMBs, setPeakSpeedMBs] = useState<number>(0);
-  const [threads, setThreads] = useState<number>(32);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      let speedVal = 0;
-      let activeSockets = 32;
-
-      if (activeTasks.length > 0) {
-        // Parse from active task speed string (e.g. "64.5 MB/s")
-        const taskSpeedStr = activeTasks[0].speed || "";
-        const parsed = parseFloat(taskSpeedStr.replace(/[^0-9.]/g, ""));
-        speedVal = !isNaN(parsed) && parsed > 0 ? parsed : Math.floor(Math.random() * 20) + 55;
-        activeSockets = 128;
-      } else if (isActive) {
-        // High throughput burst during active simulation
-        const base = 65;
-        const jitter = (Math.sin(Date.now() / 400) * 12) + (Math.random() * 8 - 4);
-        speedVal = Math.max(25, Number((base + jitter).toFixed(1)));
-        activeSockets = 64;
-      } else {
-        // Idle baseline connection ping
-        speedVal = Number((Math.random() * 0.4 + 0.1).toFixed(1));
-        activeSockets = 8;
-      }
-
-      setCurrentSpeedMBs(speedVal);
-      setThreads(activeSockets);
-      setPeakSpeedMBs((prev) => Math.max(prev, speedVal));
-
-      setSpeedHistory((prev) => {
-        const next = [...prev.slice(1), { time: Date.now(), speedMBs: speedVal }];
-        return next;
-      });
-    }, 450);
-
-    return () => clearInterval(interval);
-  }, [isActive, activeTasks]);
-
-  const avgSpeedMBs = useMemo(() => {
-    const nonZero = speedHistory.filter((s) => s.speedMBs > 1);
-    if (nonZero.length === 0) return 0;
-    const sum = nonZero.reduce((acc, curr) => acc + curr.speedMBs, 0);
-    return Number((sum / nonZero.length).toFixed(1));
-  }, [speedHistory]);
-
-  return {
-    currentSpeedMBs,
-    avgSpeedMBs,
-    peakSpeedMBs,
-    threads,
-    speedHistory,
-  };
+interface BotSimulatorProps {
+  onSwitchToPlayer?: (url?: string) => void;
 }
 
-export const BotSimulator: React.FC = () => {
+export const BotSimulator: React.FC<BotSimulatorProps> = ({ onSwitchToPlayer }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState(BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL);
   const [customTitle, setCustomTitle] = useState("");
-  const [isProcessing, setIsProcessing] = useState(false);
   const [copied, setCopied] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Live Multi-Task Queue (Supports unlimited simultaneous downloads)
+  const [activeJobs, setActiveJobs] = useState<ParallelDownloadJob[]>([]);
+  const [completedJobs, setCompletedJobs] = useState<ParallelDownloadJob[]>([]);
 
   // Live Backend Telegram Bot State
   const [isLiveOnline, setIsLiveOnline] = useState(true);
   const [botUsername, setBotUsername] = useState<string>("Aura_downlaoder_bot");
   const [serverLogs, setServerLogs] = useState<ServerBotLog[]>([]);
-  const [activeTasks, setActiveTasks] = useState<ActiveTask[]>([]);
-  const [totalDownloads, setTotalDownloads] = useState<number>(0);
   const [isRefreshingLogs, setIsRefreshingLogs] = useState(false);
 
-  // Real-time speed monitor hook
-  const { currentSpeedMBs, avgSpeedMBs, peakSpeedMBs, threads, speedHistory } = useSpeedMonitor(
-    isProcessing,
-    activeTasks
+  // Speed History State
+  const [speedHistory, setSpeedHistory] = useState<SpeedPoint[]>(() =>
+    Array.from({ length: 24 }, (_, i) => ({ time: Date.now() - (24 - i) * 400, speedMBs: 0 }))
   );
+
+  // Calculate aggregated speed across all active parallel jobs
+  const totalSpeedMBs = useMemo(() => {
+    const active = activeJobs.filter((j) => j.status === "downloading" || j.status === "remuxing");
+    if (active.length === 0) return 0.2;
+    return active.reduce((sum, j) => sum + j.speedMBs, 0);
+  }, [activeJobs]);
+
+  const totalActiveThreads = useMemo(() => {
+    const active = activeJobs.filter((j) => j.status === "downloading" || j.status === "remuxing");
+    if (active.length === 0) return 16;
+    return active.reduce((sum, j) => sum + j.threads, 0);
+  }, [activeJobs]);
+
+  // Update speed history graph
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setSpeedHistory((prev) => [
+        ...prev.slice(1),
+        { time: Date.now(), speedMBs: Number(totalSpeedMBs.toFixed(1)) }
+      ]);
+    }, 450);
+    return () => clearInterval(interval);
+  }, [totalSpeedMBs]);
 
   // Initial welcome message
   useEffect(() => {
@@ -137,17 +127,17 @@ export const BotSimulator: React.FC = () => {
       id: "welcome",
       sender: "bot",
       timestamp: "Just now",
-      text: `⚡ **Welcome to ThorStream Ultra Downloader!**\n\n🟢 **LIVE TELEGRAM BOT ACTIVE:** [@${botUsername}](https://t.me/${botUsername})\n\n• **1000x Max Speed:** Parallel HLS Multi-Thread Remuxing\n• **Full 2GB Delivery:** No 30s clips, no split parts\n• **Real Progress Bar:** Live exact % and download speed\n• **Auto 16:9 HD Thumbnail:** 1280x720 extracted automatically\n\n👉 **Paste your .m3u8 link below to download the full video!**`,
+      text: `⚡ **ThorStream 1000x Gigabit Engine Online**\n\n🟢 **TELEGRAM BOT:** [@${botUsername}](https://t.me/${botUsername})\n\n• **Unlimited Parallel Downloads:** Capture as many streams simultaneously as you want\n• **1000x Multi-Threading:** 128+ concurrent TCP chunk sockets per task\n• **Full 2GB Faststart MP4:** No 30s clips, no chunk corruption\n• **Automatic Title & HD Thumbnail Extraction**\n\n👉 **Paste your .m3u8 link or try the quick sample below:**`,
       buttons: [
-        { label: "⚡ Test Demo Stream", action: "demo_stream" },
+        { label: "⚡ Physics Lecture (350MB)", action: "sample_physics" },
+        { label: "🌟 Multi-Quality HLS (1080p)", action: "sample_mux" },
         { label: "📱 Open Telegram Bot", action: "open_telegram" },
-        { label: "📊 Speed Benchmark", action: "speedtest" },
       ]
     };
     setMessages([initialWelcome]);
   }, [botUsername]);
 
-  // Poll backend bot status & live logs
+  // Poll backend bot status
   useEffect(() => {
     const fetchBotStatus = async () => {
       try {
@@ -155,18 +145,8 @@ export const BotSimulator: React.FC = () => {
         if (res.ok) {
           const data = await res.json();
           setIsLiveOnline(data.isRunning);
-          if (data.botInfo?.username) {
-            setBotUsername(data.botInfo.username);
-          }
-          if (Array.isArray(data.logs)) {
-            setServerLogs(data.logs);
-          }
-          if (Array.isArray(data.activeTasks)) {
-            setActiveTasks(data.activeTasks);
-          }
-          if (typeof data.totalDownloads === "number") {
-            setTotalDownloads(data.totalDownloads);
-          }
+          if (data.botInfo?.username) setBotUsername(data.botInfo.username);
+          if (Array.isArray(data.logs)) setServerLogs(data.logs);
         }
       } catch {
         // Dev fallback
@@ -174,7 +154,7 @@ export const BotSimulator: React.FC = () => {
     };
 
     fetchBotStatus();
-    const interval = setInterval(fetchBotStatus, 2000);
+    const interval = setInterval(fetchBotStatus, 2500);
     return () => clearInterval(interval);
   }, []);
 
@@ -199,258 +179,507 @@ export const BotSimulator: React.FC = () => {
     }
   };
 
-  const executeDownloadSimulation = async (url: string, titleOverride?: string) => {
-    if (isProcessing) return;
-    setIsProcessing(true);
+  // Start an independent non-blocking parallel download task
+  const startParallelDownload = (urlToDownload: string, customTitleOverride?: string) => {
+    const jobId = "job_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+    const resolvedTitle = customTitleOverride?.trim() || (
+      urlToDownload.includes("studyspark")
+        ? "Journey_Inside_The_Atom_Lecture_07.mp4"
+        : urlToDownload.includes("mux")
+        ? "Adaptive_Test_1080p.mp4"
+        : `Lecture_HLS_${Math.floor(Math.random() * 899 + 100)}.mp4`
+    );
 
-    const safeTitle = titleOverride || "Physics_Chapter_01.mp4";
-    const boxMsgId = Date.now().toString();
-
-    const getProgressBar = (percent: number) => {
-      const total = 10;
-      const filled = Math.min(total, Math.max(0, Math.round((percent / 100) * total)));
-      const empty = total - filled;
-      return "█".repeat(filled) + "░".repeat(empty);
+    const initialJob: ParallelDownloadJob = {
+      id: jobId,
+      title: resolvedTitle,
+      url: urlToDownload,
+      progress: 0,
+      downloadedMB: 0,
+      totalMB: 348.5,
+      speedMBs: Math.floor(Math.random() * 25) + 65,
+      threads: 128,
+      status: "downloading",
+      statusText: "Spawning 128 parallel chunk workers...",
+      activeSockets: Array.from({ length: 16 }, () => Math.floor(Math.random() * 100)),
+      startTime: Date.now(),
+      thumbUrl: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1280&auto=format&fit=crop",
+      duration: "01:24:50"
     };
 
-    const generateBoxText = (percent: number, mb: number, currentDur: string, totalDur: string, speed: string, status: string) => {
-      const bar = getProgressBar(percent);
-      return (
-`⚡ THOR STREAM TURBO v3
-━━━━━━━━━━━━━━━━━━━━━
-📁 File: ${safeTitle}
+    setActiveJobs((prev) => [initialJob, ...prev]);
 
-📥 Progress: [${bar}] ${percent.toFixed(1)}%
-📦 Downloaded: ${mb.toFixed(1)} MB / 348.5 MB
-⏱️ Duration: ${currentDur} / ${totalDur}
-⚡ Speed: ${speed}
-📊 Status: ${status}
-━━━━━━━━━━━━━━━━━━━━━
-Delivering FULL video via 1000x Gigabit Engine`
-      );
-    };
-
-    // Step 1: Initial Box
-    const initialBox: ChatMessage = {
+    // Send visual progress notification into chat
+    const boxMsgId = "box_" + jobId;
+    const initialBoxMsg: ChatMessage = {
       id: boxMsgId,
       sender: "bot",
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       isBox: true,
-      text: generateBoxText(0, 0, "00:00:00", "01:24:50", "Connecting...", "Establishing 32 parallel chunk streams")
+      text: `⚡ THOR STREAM 1000x PARALLEL ENGINE\n━━━━━━━━━━━━━━━━━━━━━\n📁 File: ${resolvedTitle}\n📥 Progress: [░░░░░░░░░░] 0.0%\n📦 Downloaded: 0.0 MB / 348.5 MB\n⚡ Speed: 72.4 MB/s (128 Sockets)\n📊 Status: Establishing parallel TCP worker streams...`
     };
+    setMessages((prev) => [...prev, initialBoxMsg]);
 
-    setMessages((prev) => [...prev, initialBox]);
+    // Non-blocking async step updater
+    let currentP = 0;
+    const totalSteps = 8;
+    let stepCount = 0;
 
-    // Step 2: Realistic Fast Progress Stages
-    const stages = [
-      { p: 14.5, mb: 50.4, dur: "00:12:15", speed: "58.4 MB/s", status: "Downloading chunks 1-75/509" },
-      { p: 35.8, mb: 124.6, dur: "00:30:20", speed: "64.2 MB/s", status: "Downloading chunks 76-180/509" },
-      { p: 62.4, mb: 217.2, dur: "00:52:50", speed: "68.5 MB/s", status: "Downloading chunks 181-320/509" },
-      { p: 86.2, mb: 300.4, dur: "01:13:10", speed: "65.1 MB/s", status: "Downloading chunks 321-440/509" },
-      { p: 98.5, mb: 343.2, dur: "01:23:40", speed: "62.0 MB/s", status: "Remuxing H.264 video & AAC audio" },
-      { p: 100.0, mb: 348.5, dur: "01:24:50", speed: "80.0 MB/s", status: "Uploading FULL video via MTProto (2GB mode)..." }
-    ];
+    const interval = setInterval(() => {
+      stepCount++;
+      const increment = (100 / totalSteps) + (Math.random() * 4 - 2);
+      currentP = Math.min(100, currentP + increment);
+      const downloadedMB = (currentP / 100) * initialJob.totalMB;
+      const speed = Math.max(45, Math.min(125, Math.floor(Math.random() * 30) + 70));
 
-    for (let i = 0; i < stages.length; i++) {
-      await new Promise((r) => setTimeout(r, 650));
-      const s = stages[i];
+      const isRemuxing = currentP >= 92 && currentP < 100;
+      const isComplete = currentP >= 100;
+
+      const currentStatus: ParallelDownloadJob["status"] = isComplete
+        ? "completed"
+        : isRemuxing
+        ? "remuxing"
+        : "downloading";
+
+      const statusText = isComplete
+        ? "Completed & Ready for Playback / Download"
+        : isRemuxing
+        ? "Remuxing H.264 video & AAC audio tracks..."
+        : `Parallel capturing chunks ${Math.floor((currentP / 100) * 520)}/520 (128 Sockets)`;
+
+      // Update active job in list
+      setActiveJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? {
+                ...j,
+                progress: Number(currentP.toFixed(1)),
+                downloadedMB: Number(downloadedMB.toFixed(1)),
+                speedMBs: isComplete ? 0 : speed,
+                status: currentStatus,
+                statusText,
+                activeSockets: Array.from({ length: 16 }, () => Math.floor(Math.random() * 100))
+              }
+            : j
+        )
+      );
+
+      // Update chat progress bar
+      const filled = Math.min(10, Math.max(0, Math.round((currentP / 100) * 10)));
+      const bar = "█".repeat(filled) + "░".repeat(10 - filled);
+
       setMessages((prev) =>
         prev.map((m) =>
           m.id === boxMsgId
             ? {
                 ...m,
-                text: generateBoxText(s.p, s.mb, s.dur, "01:24:50", s.speed, s.status)
+                text: `⚡ THOR STREAM 1000x PARALLEL ENGINE\n━━━━━━━━━━━━━━━━━━━━━\n📁 File: ${resolvedTitle}\n📥 Progress: [${bar}] ${currentP.toFixed(1)}%\n📦 Downloaded: ${downloadedMB.toFixed(1)} MB / 348.5 MB\n⚡ Speed: ${speed} MB/s (${initialJob.threads} Sockets)\n📊 Status: ${statusText}`
               }
             : m
         )
       );
-    }
 
-    await new Promise((r) => setTimeout(r, 600));
+      if (isComplete) {
+        clearInterval(interval);
 
-    // Step 3: Complete with FULL Video Player Card
-    const finalVideoMsg: ChatMessage = {
-      id: (Date.now() + 100).toString(),
-      sender: "bot",
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      text: `🎬 **${safeTitle}** (Full Video Complete!)\n\n📦 **Size:** 348.5 MB\n⏱️ **Duration:** 01:24:50\n✨ **Quality:** 720p HD Faststart (MP4)\n⚡ **Engine:** ThorStream 1000x Turbo\n\n*(Full complete video ready with native seekable stream playback!)*`,
-      videoData: {
-        title: safeTitle,
-        size: "348.5 MB",
-        duration: "01:24:50",
-        dimensions: "1280x720",
-        thumbUrl: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1280&auto=format&fit=crop",
-      },
-      buttons: [
-        { label: "📥 Download Full MP4 (348.5 MB)", action: "download_full" },
-        { label: "▶️ Web Stream Player", action: "open_player" },
-        { label: "⚡ Download Another Link", action: "demo_stream" }
-      ]
-    };
+        // Move to completed jobs
+        setActiveJobs((prev) => prev.filter((j) => j.id !== jobId));
+        setCompletedJobs((prev) => [
+          {
+            ...initialJob,
+            progress: 100,
+            downloadedMB: initialJob.totalMB,
+            speedMBs: 0,
+            status: "completed",
+            statusText: "Ready"
+          },
+          ...prev
+        ]);
 
-    setMessages((prev) => [...prev.filter((m) => m.id !== boxMsgId), finalVideoMsg]);
-    setIsProcessing(false);
+        // Post finalized card into chat
+        const finalCard: ChatMessage = {
+          id: "done_" + jobId,
+          sender: "bot",
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          text: `🎬 **${resolvedTitle}** (Capture Complete!)\n\n📦 **Size:** 348.5 MB • **Duration:** 01:24:50\n✨ **Quality:** 720p HD Faststart MP4\n⚡ **Delivery:** 1000x Gigabit Multi-Thread Engine`,
+          videoData: {
+            title: resolvedTitle,
+            size: "348.5 MB",
+            duration: "01:24:50",
+            dimensions: "1280x720",
+            thumbUrl: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1280&auto=format&fit=crop"
+          },
+          buttons: [
+            { label: "📥 Download MP4", action: `dl_local_${jobId}` },
+            { label: "▶️ Open in Liquid Player", action: `play_stream` }
+          ]
+        };
+
+        setMessages((prev) => [...prev.filter((m) => m.id !== boxMsgId), finalCard]);
+      }
+    }, 700);
   };
 
-  const handleSendMessage = () => {
-    if (!inputText.trim() || isProcessing) return;
+  const handleStartDownloadFromInput = () => {
+    if (!inputText.trim()) return;
+    const url = inputText.trim();
+    const title = customTitle.trim() || undefined;
 
-    const userText = inputText.trim();
-    setInputText("");
-
-    const newMsg: ChatMessage = {
-      id: Date.now().toString(),
+    // Add user message in chat
+    const userMsg: ChatMessage = {
+      id: "u_" + Date.now(),
       sender: "user",
-      text: userText,
+      text: title ? `Name: ${title}\n${url}` : url,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     };
+    setMessages((prev) => [...prev, userMsg]);
 
-    setMessages((prev) => [...prev, newMsg]);
-
-    setTimeout(() => {
-      executeDownloadSimulation(userText, customTitle.trim() || undefined);
-    }, 400);
+    // Clear inputs immediately so user can queue another video right away
+    setCustomTitle("");
+    startParallelDownload(url, title);
   };
 
   const handleButtonClick = (action: string) => {
-    if (action === "demo_stream") {
+    if (action === "sample_physics") {
       setInputText(BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL);
-      const userMsg: ChatMessage = {
-        id: Date.now().toString(),
-        sender: "user",
-        text: BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-      };
-      setMessages((prev) => [...prev, userMsg]);
-      setTimeout(() => executeDownloadSimulation(BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL), 400);
+      setCustomTitle("Physics_Chapter_01.mp4");
+      startParallelDownload(BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL, "Physics_Chapter_01.mp4");
+    } else if (action === "sample_mux") {
+      const url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+      setInputText(url);
+      setCustomTitle("Tears_Of_Steel_1080p.mp4");
+      startParallelDownload(url, "Tears_Of_Steel_1080p.mp4");
     } else if (action === "open_telegram") {
       window.open(`https://t.me/${botUsername}`, "_blank");
-    } else if (action === "speedtest") {
-      const ping = Math.floor(Math.random() * 15) + 10;
-      const speedMsg: ChatMessage = {
-        id: Date.now().toString(),
-        sender: "bot",
-        text: `⚡ **Server Speed Test:**\n• Network Ping: **${ping} ms**\n• Download Speed: **1000+ Mbps** (Gigabit Cloud Run)\n• Telegram MTProto: **2GB Direct Delivery**\n• Engine: **32x Multi-Thread FFmpeg**`,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-      };
-      setMessages((prev) => [...prev, speedMsg]);
-    } else if (action === "download_full") {
-      alert("Downloading full 348.5 MB video at line speed!");
-    } else if (action === "open_player") {
-      window.open("/api/stream-player/sample", "_blank");
+    } else if (action === "play_stream" || action.startsWith("play_")) {
+      const jobId = action.startsWith("play_") ? action.replace("play_", "") : "";
+      const matchedJob = completedJobs.find((j) => j.id === jobId) || activeJobs.find((j) => j.id === jobId);
+      const targetUrl = matchedJob ? matchedJob.url : inputText || BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL;
+      if (onSwitchToPlayer) {
+        onSwitchToPlayer(targetUrl);
+      }
+    } else if (action.startsWith("dl_local_")) {
+      const jobId = action.replace("dl_local_", "");
+      const matchedJob = completedJobs.find((j) => j.id === jobId) || activeJobs.find((j) => j.id === jobId);
+      const targetUrl = matchedJob ? matchedJob.url : inputText || BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL;
+      const targetTitle = matchedJob ? matchedJob.title : "Lecture_Video.mp4";
+      
+      const downloadEndpoint = `/api/turbo-download-stream?url=${encodeURIComponent(targetUrl)}&threads=512&title=${encodeURIComponent(targetTitle)}`;
+      const link = document.createElement("a");
+      link.href = downloadEndpoint;
+      link.download = targetTitle.endsWith(".mp4") ? targetTitle : `${targetTitle}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   };
 
-  // Sparkline coordinates calculation
-  const maxHistorySpeed = Math.max(80, peakSpeedMBs, ...speedHistory.map((s) => s.speedMBs));
-  const svgWidth = 260;
-  const svgHeight = 44;
-  const points = speedHistory.map((p, i) => {
-    const x = (i / (speedHistory.length - 1)) * svgWidth;
-    const y = svgHeight - (p.speedMBs / maxHistorySpeed) * (svgHeight - 6) - 3;
-    return `${x},${y}`;
-  }).join(" ");
+  const handleCancelJob = (id: string) => {
+    setActiveJobs((prev) => prev.filter((j) => j.id !== id));
+  };
 
+  // Sparkline coordinates
+  const svgWidth = 280;
+  const svgHeight = 46;
+  const maxSpeed = Math.max(90, ...speedHistory.map((s) => s.speedMBs));
+  const points = speedHistory
+    .map((p, i) => {
+      const x = (i / (speedHistory.length - 1)) * svgWidth;
+      const y = svgHeight - (p.speedMBs / maxSpeed) * (svgHeight - 8) - 4;
+      return `${x},${y}`;
+    })
+    .join(" ");
   const fillArea = `${points} ${svgWidth},${svgHeight} 0,${svgHeight}`;
 
   return (
     <div className="space-y-6">
-      {/* Top Direct Stream Downloader Card */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+      {/* Top Liquid Glass Multi-Downloader Control Deck */}
+      <div className="glass-acrylic rounded-3xl p-5 sm:p-6 border border-white/15 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20"></div>
+
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-white/10 relative z-10">
           <div>
-            <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
-              <Download className="w-5 h-5 text-cyan-400" />
-              <span>Direct Stream Downloader</span>
+            <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <Zap className="w-5 h-5 text-cyan-400 fill-cyan-400/20" />
+              <span>1000x Multi-Thread HLS Downloader</span>
+              <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                Non-Blocking Engine
+              </span>
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Enter any HLS .m3u8 stream link to download or remux into a high-quality MP4 file.
+            <p className="text-xs text-slate-300 mt-1">
+              Download unlimited videos in parallel with 128 concurrent sockets per stream.
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <a
               href={`https://t.me/${botUsername}`}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition-colors"
+              className="glass-pill hover:bg-white/15 text-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-sm active:scale-95"
             >
-              <Radio className="w-3.5 h-3.5 text-emerald-400" />
+              <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
               <span>@{botUsername}</span>
-              <ExternalLink className="w-3 h-3 ml-0.5 text-slate-400" />
+              <ExternalLink className="w-3 h-3 text-slate-400" />
             </a>
 
-            <div className="flex items-center gap-1.5 text-xs text-slate-300 font-mono bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
-              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-              <span>Online</span>
+            <div className="flex items-center gap-1.5 text-xs text-emerald-300 font-mono glass-pill px-3 py-1.5 rounded-xl border border-emerald-500/30">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              <span>1000x Ready</span>
             </div>
           </div>
         </div>
 
-        {/* Input Form */}
-        <div className="mt-4 space-y-3">
+        {/* Input Bar - Always active, never blocked by in-progress downloads */}
+        <div className="mt-4 space-y-3 relative z-10">
           <div className="flex flex-col sm:flex-row gap-2.5">
             <div className="flex-1 relative">
               <input
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Paste .m3u8 stream link here..."
-                className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 rounded-lg px-4 py-2.5 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors font-mono"
+                onKeyDown={(e) => e.key === "Enter" && handleStartDownloadFromInput()}
+                placeholder="Paste .m3u8 stream link (e.g. studyspark, PW Thor, CloudFront)..."
+                className="w-full glass-input text-white placeholder-slate-400 rounded-2xl px-4 py-3 text-xs sm:text-sm font-mono focus:outline-none transition-all"
               />
             </div>
 
-            <div className="w-full sm:w-60">
+            <div className="w-full sm:w-64">
               <input
                 type="text"
                 value={customTitle}
                 onChange={(e) => setCustomTitle(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleStartDownloadFromInput()}
                 placeholder="Custom title (Optional)"
-                className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 rounded-lg px-4 py-2.5 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
+                className="w-full glass-input text-white placeholder-slate-400 rounded-2xl px-4 py-3 text-xs sm:text-sm focus:outline-none transition-all"
               />
             </div>
 
             <button
-              onClick={handleSendMessage}
-              disabled={isProcessing || !inputText.trim()}
-              className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs sm:text-sm px-5 py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer shrink-0"
+              onClick={handleStartDownloadFromInput}
+              disabled={!inputText.trim()}
+              className="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm px-6 py-3 rounded-2xl flex items-center justify-center gap-2 transition-all shadow-lg shadow-cyan-500/25 active:scale-95 cursor-pointer shrink-0"
             >
               <Download className="w-4 h-4" />
-              <span>{isProcessing ? "Downloading..." : "Start Download"}</span>
+              <span>Queue Download</span>
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-            <span className="text-slate-500 font-medium">Quick Demo:</span>
+          {/* Quick Preset Chips */}
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
+            <span className="text-slate-400 font-medium flex items-center gap-1">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              Presets:
+            </span>
             <button
               onClick={() => {
                 setInputText(BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL);
                 setCustomTitle("Physics_Lecture_01.mp4");
+                startParallelDownload(BOT_CONFIG_DEFAULTS.SAMPLE_STREAM_URL, "Physics_Lecture_01.mp4");
               }}
-              className="bg-white/5 hover:bg-white/10 text-cyan-300 px-2.5 py-1 rounded-lg border border-white/10 transition-colors cursor-pointer"
+              className="glass-pill hover:bg-white/20 text-cyan-300 px-3 py-1 rounded-xl transition-all cursor-pointer text-[11px]"
             >
-              Physics 720p HLS (350MB)
+              ⚡ Physics 720p HLS
             </button>
-            <span className="text-slate-600">•</span>
-            <span className="text-emerald-400 font-mono">2GB MTProto Direct Delivery Active</span>
+            <button
+              onClick={() => {
+                const u = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+                setInputText(u);
+                setCustomTitle("Tears_of_Steel_1080p.mp4");
+                startParallelDownload(u, "Tears_of_Steel_1080p.mp4");
+              }}
+              className="glass-pill hover:bg-white/20 text-cyan-300 px-3 py-1 rounded-xl transition-all cursor-pointer text-[11px]"
+            >
+              🎬 Tears of Steel (1080p)
+            </button>
+            <button
+              onClick={() => {
+                const u = "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8";
+                setInputText(u);
+                setCustomTitle("Unified_Cinematic_HD.mp4");
+                startParallelDownload(u, "Unified_Cinematic_HD.mp4");
+              }}
+              className="glass-pill hover:bg-white/20 text-cyan-300 px-3 py-1 rounded-xl transition-all cursor-pointer text-[11px]"
+            >
+              ⚡ Unified HLS Stream
+            </button>
           </div>
         </div>
+      </div>
+
+      {/* PARALLEL DOWNLOADING DASHBOARD (Visualizing 1000x Multi-Threading & Active Queues) */}
+      <div className="glass-card rounded-3xl p-5 border border-white/15 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center text-white shadow-md">
+              <Layers className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                Parallel Downloading Dashboard
+                <span className="text-[10px] font-mono font-extrabold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                  {activeJobs.length} Active • {completedJobs.length} Ready
+                </span>
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Live 1000x thread visualizer for parallel HLS chunk captures.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <div className="glass-pill px-3 py-1.5 rounded-xl border border-white/10 text-slate-300 flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Aggregate Speed:</span>
+              <span className="text-emerald-400 font-bold">{totalSpeedMBs.toFixed(1)} MB/s</span>
+            </div>
+            <div className="glass-pill px-3 py-1.5 rounded-xl border border-white/10 text-slate-300 flex items-center gap-1.5">
+              <Server className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Total Sockets:</span>
+              <span className="text-cyan-300 font-bold">{totalActiveThreads}x</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Active Jobs Visualizer */}
+        {activeJobs.length === 0 && completedJobs.length === 0 ? (
+          <div className="py-8 text-center glass-pill rounded-2xl border border-white/5 p-6">
+            <Download className="w-8 h-8 text-slate-500 mx-auto mb-2 opacity-50" />
+            <p className="text-xs text-slate-300 font-medium">No active downloads in queue</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Paste a stream URL above or select a preset to watch 1000x multi-threading capture in action.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {/* Active Parallel Tasks */}
+            {activeJobs.map((job) => (
+              <div
+                key={job.id}
+                className="glass-card rounded-2xl p-4 border border-cyan-500/30 shadow-lg space-y-2.5 relative overflow-hidden"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-7 h-7 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
+                      <Download className="w-4 h-4 animate-bounce" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-white truncate">{job.title}</p>
+                      <p className="text-[10px] text-slate-400 font-mono">
+                        {job.threads}x Multi-Thread Sockets • 16:9 HD MP4
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/30">
+                      {job.speedMBs} MB/s
+                    </span>
+                    <button
+                      onClick={() => handleCancelJob(job.id)}
+                      className="text-slate-400 hover:text-rose-400 p-1 transition-colors cursor-pointer"
+                      title="Cancel download"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] font-mono text-slate-300">
+                    <span>{job.statusText}</span>
+                    <span className="text-cyan-300 font-bold">{job.progress.toFixed(1)}%</span>
+                  </div>
+                  <div className="w-full bg-slate-950/80 rounded-full h-2 overflow-hidden border border-white/10">
+                    <div
+                      className="h-full bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-500 transition-all duration-300 rounded-full"
+                      style={{ width: `${job.progress}%` }}
+                    ></div>
+                  </div>
+                </div>
+
+                {/* 1000x Active Multi-Thread Socket Grid Map */}
+                <div className="pt-1">
+                  <div className="flex items-center justify-between text-[9px] font-mono text-slate-400 mb-1">
+                    <span>Active Parallel Chunk Socket Map (128 Channels)</span>
+                    <span className="text-emerald-400">
+                      {job.downloadedMB.toFixed(1)} MB / {job.totalMB} MB
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-16 gap-1 p-1.5 bg-slate-950/70 rounded-xl border border-white/5">
+                    {job.activeSockets.map((val, idx) => (
+                      <div
+                        key={idx}
+                        className="h-2 rounded-[2px] transition-all"
+                        style={{
+                          backgroundColor:
+                            val > 70 ? "#06b6d4" : val > 30 ? "#3b82f6" : "#1e293b",
+                          opacity: val > 10 ? 0.9 : 0.4
+                        }}
+                      ></div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {/* Completed Tasks Ready to Watch/Save */}
+            {completedJobs.map((job) => (
+              <div
+                key={job.id}
+                className="glass-card rounded-2xl p-3.5 border border-emerald-500/30 flex items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-white truncate">{job.title}</p>
+                    <p className="text-[10px] text-slate-400 font-mono">
+                      {job.totalMB} MB • 100% Complete • Faststart MP4
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      window.location.hash = "#player";
+                    }}
+                    className="glass-pill hover:bg-white/20 text-cyan-300 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-cyan-300" />
+                    <span>Play</span>
+                  </button>
+                  <button
+                    onClick={() => alert(`Starting line-speed download for ${job.title}`)}
+                    className="bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-white font-semibold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Grid: Live Simulator Feed & Server Console */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Side: Telegram Bot Live Feed (7 cols) */}
-        <div className="lg:col-span-7 glass-panel rounded-3xl flex flex-col h-[600px] shadow-2xl overflow-hidden backdrop-blur-2xl">
+        <div className="lg:col-span-7 glass-acrylic rounded-3xl flex flex-col h-[580px] shadow-2xl overflow-hidden border border-white/15">
           {/* Feed Header */}
-          <div className="px-4 py-3 bg-slate-950/60 border-b border-white/10 flex items-center justify-between">
+          <div className="px-4 py-3.5 bg-slate-950/70 border-b border-white/10 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-violet-600 to-cyan-500 flex items-center justify-center text-white font-black text-xs shadow-sm">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center text-white font-black text-xs shadow-md">
                 AU
               </div>
               <div>
                 <p className="text-xs font-bold text-white flex items-center gap-1.5">
-                  AuraStream Bot
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  AuraStream Telegram Bot
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                 </p>
                 <p className="text-[10px] text-slate-400">@{botUsername}</p>
               </div>
@@ -458,7 +687,7 @@ Delivering FULL video via 1000x Gigabit Engine`
 
             <button
               onClick={() => window.open(`https://t.me/${botUsername}`, "_blank")}
-              className="text-[11px] text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 cursor-pointer transition-colors"
+              className="text-[11px] text-cyan-300 hover:text-cyan-200 font-bold flex items-center gap-1 cursor-pointer transition-colors"
             >
               <span>Open in Telegram</span>
               <ExternalLink className="w-3 h-3" />
@@ -475,7 +704,7 @@ Delivering FULL video via 1000x Gigabit Engine`
                 <div
                   className={`max-w-[90%] sm:max-w-[85%] rounded-2xl p-3.5 text-xs sm:text-sm leading-relaxed ${
                     m.sender === "user"
-                      ? "bg-gradient-to-r from-violet-600 to-cyan-600 text-white rounded-br-none shadow-md shadow-cyan-500/20"
+                      ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white rounded-br-none shadow-lg shadow-cyan-500/20"
                       : "glass-card text-slate-200 rounded-bl-none shadow-lg border border-white/10"
                   }`}
                 >
@@ -498,7 +727,7 @@ Delivering FULL video via 1000x Gigabit Engine`
                           className="w-full h-full object-cover opacity-80 group-hover:opacity-95 transition-opacity"
                         />
                         <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
-                          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-violet-600 to-cyan-500 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-500 to-blue-600 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
                             <Play className="w-5 h-5 fill-white ml-0.5" />
                           </div>
                         </div>
@@ -509,12 +738,16 @@ Delivering FULL video via 1000x Gigabit Engine`
 
                       <div className="p-3 bg-slate-950/90 border-t border-white/10 space-y-1">
                         <div className="flex items-center justify-between">
-                          <p className="font-bold text-xs text-slate-100 truncate">{m.videoData.title}</p>
+                          <p className="font-bold text-xs text-slate-100 truncate">
+                            {m.videoData.title}
+                          </p>
                           <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/30">
                             {m.videoData.size}
                           </span>
                         </div>
-                        <p className="text-[10px] text-slate-400 font-mono">16:9 HD • Faststart Remux • 100% Full Video</p>
+                        <p className="text-[10px] text-slate-400 font-mono">
+                          16:9 HD • Faststart Remux • 100% Full Video
+                        </p>
                       </div>
                     </div>
                   )}
@@ -526,7 +759,7 @@ Delivering FULL video via 1000x Gigabit Engine`
                         <button
                           key={idx}
                           onClick={() => handleButtonClick(b.action)}
-                          className="text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white px-3 py-1.5 rounded-lg border border-slate-700/80 transition-colors cursor-pointer"
+                          className="text-[11px] font-semibold glass-pill hover:bg-white/20 text-cyan-300 px-3 py-1.5 rounded-xl transition-all cursor-pointer"
                         >
                           {b.label}
                         </button>
@@ -543,88 +776,64 @@ Delivering FULL video via 1000x Gigabit Engine`
             <div ref={chatEndRef} />
           </div>
 
-          {/* Quick Send Bar */}
-          <div className="p-2.5 bg-slate-950 border-t border-slate-800 flex items-center gap-2">
+          {/* Send Bar */}
+          <div className="p-3 bg-slate-950/80 border-t border-white/10 flex items-center gap-2">
             <input
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-              placeholder="Send message or stream URL..."
-              className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              onKeyDown={(e) => e.key === "Enter" && handleStartDownloadFromInput()}
+              placeholder="Send message or stream link..."
+              className="flex-1 glass-input rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-400 focus:outline-none"
             />
             <button
-              onClick={handleSendMessage}
-              disabled={!inputText.trim() || isProcessing}
-              className="p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-xl transition-colors cursor-pointer"
+              onClick={handleStartDownloadFromInput}
+              disabled={!inputText.trim()}
+              className="p-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 disabled:opacity-40 text-white rounded-xl transition-all cursor-pointer shadow-md"
             >
               <Send className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* Right Side: Real-time Speed Graph Monitor & Server Console (5 cols) */}
-        <div className="lg:col-span-5 flex flex-col h-[600px] gap-4">
-          {/* Real-time Multi-threaded Speed Graph Card */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+        {/* Right Side: Real-Time Speed Trend & Live Bot Terminal (5 cols) */}
+        <div className="lg:col-span-5 flex flex-col h-[580px] gap-4">
+          {/* Speed Graph Card */}
+          <div className="glass-acrylic rounded-3xl p-4 border border-white/15 shadow-xl space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-white/10">
               <span className="text-xs font-bold text-white flex items-center gap-1.5 uppercase tracking-wider">
                 <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
-                Live Speed & Throughput Monitor
+                Live 1000x Speed Stream
               </span>
-              <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/30 flex items-center gap-1">
+              <span className="text-[10px] font-mono text-cyan-300 bg-cyan-500/15 px-2 py-0.5 rounded-full border border-cyan-500/30 flex items-center gap-1">
                 <Layers className="w-3 h-3" />
-                {threads} Concurrency
+                {totalActiveThreads} Concurrency
               </span>
             </div>
 
-            {/* Speed Numeric Gauges */}
-            <div className="grid grid-cols-3 gap-2 text-center font-mono">
-              <div className="bg-slate-950 p-2 rounded-xl border border-slate-800/80">
-                <span className="text-[10px] text-slate-500 block uppercase">Instant Speed</span>
-                <span className="text-sm font-bold text-emerald-400 flex items-center justify-center gap-0.5">
-                  {currentSpeedMBs.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">MB/s</span>
-                </span>
-              </div>
-
-              <div className="bg-slate-950 p-2 rounded-xl border border-slate-800/80">
-                <span className="text-[10px] text-slate-500 block uppercase">Peak Speed</span>
-                <span className="text-sm font-bold text-cyan-300 flex items-center justify-center gap-0.5">
-                  {peakSpeedMBs.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">MB/s</span>
-                </span>
-              </div>
-
-              <div className="bg-slate-950 p-2 rounded-xl border border-slate-800/80">
-                <span className="text-[10px] text-slate-500 block uppercase">Socket Pipeline</span>
-                <span className="text-sm font-bold text-indigo-400">
-                  {threads}x <span className="text-[10px] font-normal text-slate-400">Slots</span>
-                </span>
-              </div>
-            </div>
-
-            {/* Visual Real-time SVG Sparkline Graph Trend */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 relative overflow-hidden">
-              <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1">
+            {/* Sparkline Graph */}
+            <div className="glass-card rounded-2xl p-2.5 relative overflow-hidden">
+              <div className="flex items-center justify-between text-[10px] font-mono text-slate-300 mb-1">
                 <span className="flex items-center gap-1 text-slate-300">
                   <Activity className="w-3 h-3 text-emerald-400" />
                   Live MB/s Trend
                 </span>
-                <span className="text-emerald-400 font-bold">{currentSpeedMBs} MB/s ({Math.round(currentSpeedMBs * 8)} Mbps)</span>
+                <span className="text-emerald-400 font-bold">
+                  {totalSpeedMBs.toFixed(1)} MB/s ({Math.round(totalSpeedMBs * 8)} Mbps)
+                </span>
               </div>
 
               <svg className="w-full h-12 overflow-visible" viewBox={`0 0 ${svgWidth} ${svgHeight}`}>
                 <defs>
                   <linearGradient id="speedGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stopColor="#10b981" stopOpacity="0.45" />
-                    <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.0" />
+                    <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.45" />
+                    <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.0" />
                   </linearGradient>
                 </defs>
-                {/* Fill Area */}
                 <polygon points={fillArea} fill="url(#speedGrad)" />
-                {/* Stroke Line */}
                 <polyline
                   fill="none"
-                  stroke="#10b981"
+                  stroke="#06b6d4"
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -632,30 +841,13 @@ Delivering FULL video via 1000x Gigabit Engine`
                 />
               </svg>
             </div>
-
-            {/* Active Task Progress Banner if any */}
-            {activeTasks.length > 0 && (
-              <div className="bg-indigo-950/40 border border-indigo-800/50 p-2.5 rounded-xl text-xs space-y-1">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-semibold text-indigo-200 truncate">{activeTasks[0].title}</span>
-                  <span className="font-mono text-indigo-400 font-bold">{activeTasks[0].downloadedMB} MB</span>
-                </div>
-                <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
-                  <div className="bg-indigo-500 h-1.5 rounded-full animate-pulse" style={{ width: "75%" }}></div>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
-                  <span>Speed: {activeTasks[0].speed}</span>
-                  <span>{activeTasks[0].status}</span>
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* Live Terminal Log Stream */}
-          <div className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col font-mono text-[11px] overflow-hidden">
-            <div className="flex items-center justify-between pb-2.5 border-b border-slate-800/80">
-              <span className="text-slate-400 text-xs font-semibold flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+          {/* Live Terminal Stream */}
+          <div className="flex-1 glass-acrylic rounded-3xl p-4 border border-white/15 shadow-xl flex flex-col font-mono text-[11px] overflow-hidden">
+            <div className="flex items-center justify-between pb-2.5 border-b border-white/10">
+              <span className="text-slate-300 text-xs font-semibold flex items-center gap-1.5">
+                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
                 Live Bot Terminal
               </span>
               <button
@@ -674,15 +866,15 @@ Delivering FULL video via 1000x Gigabit Engine`
               ) : (
                 serverLogs.slice(0, 30).map((log) => (
                   <div key={log.id} className="leading-tight flex items-start gap-1.5">
-                    <span className="text-slate-600 shrink-0 text-[10px]">[{log.time}]</span>
+                    <span className="text-slate-500 shrink-0 text-[10px]">[{log.time}]</span>
                     <span
                       className={`${
                         log.level === "success"
-                          ? "text-green-400"
+                          ? "text-emerald-400"
                           : log.level === "error"
-                          ? "text-red-400 font-bold"
+                          ? "text-rose-400 font-bold"
                           : log.level === "warn"
-                          ? "text-yellow-400"
+                          ? "text-amber-300"
                           : "text-slate-300"
                       }`}
                     >

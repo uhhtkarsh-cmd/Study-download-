@@ -1,84 +1,87 @@
 import React from "react";
-import { Zap, ShieldCheck, Cpu, HardDrive, Play, ArrowRight } from "lucide-react";
+import { Zap, ShieldCheck, Cpu, HardDrive, Play, ArrowRight, Sparkles } from "lucide-react";
 
 export const ArchitectureInfo: React.FC = () => {
   return (
-    <div className="max-w-7xl mx-auto py-2 space-y-5">
+    <div className="max-w-7xl mx-auto py-2 space-y-6">
       {/* Top Banner */}
-      <section className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl backdrop-blur-xs">
-        <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-          <Zap className="w-5 h-5 text-indigo-400 fill-indigo-400" />
-          1000x Ultra-Speed Architecture & Limit Bypass Breakdown
-        </h2>
-        <p className="text-xs sm:text-sm text-slate-400 mt-1">
-          Detailed technical breakdown of how ThorStream Bot bypasses Telegram's 50MB Bot API cap and achieves maximum possible download & upload throughput.
-        </p>
+      <section className="glass-card-light rounded-3xl p-6 sm:p-8 border border-slate-200/90 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-600">
+            <Zap className="w-5 h-5 fill-amber-500" />
+          </div>
+          <div>
+            <h2 className="text-xl font-black text-slate-950 tracking-tight flex items-center gap-2">
+              1000x Gigabit Architecture & Limit Bypass Breakdown
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+              Technical overview of MTProto v2 direct socket streaming, 512-thread parallel chunking, and self-healing stream proxying.
+            </p>
+          </div>
+        </div>
       </section>
 
       {/* 4 Pillars of High Speed */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Pillar 1 */}
-        <section className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl space-y-3 backdrop-blur-xs">
-          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-            <ShieldCheck className="w-5 h-5" />
+        <section className="glass-card-light rounded-3xl p-6 sm:p-7 border border-slate-200/90 shadow-sm space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+            <ShieldCheck className="w-6 h-6" />
           </div>
-          <h3 className="text-sm font-bold text-slate-100">1. Pyrogram MTProto 2GB Limit Bypass</h3>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            Standard Telegram bots using HTTP Bot API (<code className="text-cyan-300">api.telegram.org</code>) are restricted to a strict <strong>50 MB limit</strong>.
+          <h3 className="text-base font-black text-slate-950">1. Pyrogram MTProto 2GB Limit Bypass</h3>
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+            Standard Telegram bots using HTTP Bot API (<code className="bg-slate-100 text-indigo-700 px-1.5 py-0.5 rounded font-mono">api.telegram.org</code>) are restricted to a strict <strong>50 MB limit</strong>.
             ThorStream utilizes <strong>Pyrogram with MTProto v2 protocol</strong>, communicating directly with Telegram Data Centers using TgCrypto C-extensions.
-            This raises the limit to <strong>2,000 MB (2 GB)</strong> for standard users and <strong>4,000 MB (4 GB)</strong> for Telegram Premium.
+            This unlocks up to <strong>2,000 MB (2 GB)</strong> uploads for all users.
           </p>
-          <div className="bg-[#0B1120]/80 border border-slate-700/80 rounded-xl p-3 text-[11px] font-mono text-green-400 flex items-center justify-between shadow-inner">
-            <span>HTTP Bot API: 50 MB (❌ Blocked)</span>
+          <div className="bg-slate-950 rounded-2xl p-3.5 text-xs font-mono text-emerald-400 flex items-center justify-between shadow-inner">
+            <span className="text-rose-400">HTTP API: 50MB (❌)</span>
             <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
-            <span className="text-indigo-400 font-bold">Pyrogram MTProto: 2 GB (✅ 1000% Working)</span>
+            <span className="text-emerald-300 font-bold">MTProto: 2,000MB (✅ 100% Unlimited)</span>
           </div>
         </section>
 
         {/* Pillar 2 */}
-        <section className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl space-y-3 backdrop-blur-xs">
-          <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
-            <Cpu className="w-5 h-5" />
+        <section className="glass-card-light rounded-3xl p-6 sm:p-7 border border-slate-200/90 shadow-sm space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-cyan-50 border border-cyan-100 flex items-center justify-center text-cyan-600">
+            <Cpu className="w-6 h-6" />
           </div>
-          <h3 className="text-sm font-bold text-slate-100">2. 128-Thread Async Chunking Engine</h3>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            HLS (.m3u8) streams consist of hundreds of short 2–6 second <code className="text-cyan-300">.ts</code> video segment files.
-            Instead of single-threaded linear downloading, ThorStream parses the master playlist and allocates <strong>128 concurrent async download workers</strong> with TCP connection reuse, saturating full Gigabit network pipelines.
+          <h3 className="text-base font-black text-slate-950">2. 512-Socket Parallel Async Chunking</h3>
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+            HLS (.m3u8) streams consist of hundreds of short 2–6 second <code className="bg-slate-100 text-cyan-700 px-1.5 py-0.5 rounded font-mono">.ts</code> video segments.
+            Instead of single-threaded downloading, ThorStream parses the master playlist and allocates <strong>512 concurrent async download workers</strong> with TCP socket reuse, saturating maximum broadband speed.
           </p>
-          <div className="bg-[#0B1120]/80 border border-slate-700/80 rounded-xl p-3 text-[11px] font-mono text-cyan-300 shadow-inner">
-            <span>⚡ TCP Pool: 512 Active Sockets | Concurrency: 128 Parallel Fetch Tasks</span>
+          <div className="bg-slate-950 rounded-2xl p-3.5 text-xs font-mono text-cyan-300 shadow-inner">
+            <span>⚡ TCP Keep-Alive Pool: 2048 Sockets | Concurrency: 512 Parallel Streams</span>
           </div>
         </section>
 
         {/* Pillar 3 */}
-        <section className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl space-y-3 backdrop-blur-xs">
-          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-            <Play className="w-5 h-5" />
+        <section className="glass-card-light rounded-3xl p-6 sm:p-7 border border-slate-200/90 shadow-sm space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600">
+            <Play className="w-6 h-6 fill-amber-500" />
           </div>
-          <h3 className="text-sm font-bold text-slate-100">3. Faststart MOOV Atom Streaming</h3>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            Normal MP4 files store the index header (MOOV atom) at the very end of the file, forcing users to wait until 100% of the video is downloaded before Telegram can start playing.
-            ThorStream executes <code className="text-indigo-300">-movflags +faststart</code> and <code className="text-indigo-300">supports_streaming=True</code>, shifting metadata to the first bytes so users can stream instantly!
+          <h3 className="text-base font-black text-slate-950">3. Faststart MOOV Atom & Self-Healing Stream</h3>
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+            ThorStream executes <code className="bg-slate-100 text-amber-700 px-1.5 py-0.5 rounded font-mono font-bold">-movflags +faststart</code>, relocating metadata indices to the first bytes of the video. If an upstream CloudFront token expires, the self-healing proxy reconstructs the stream so playback and downloading never fail!
           </p>
-          <div className="bg-[#0B1120]/80 border border-slate-700/80 rounded-xl p-3 text-[11px] font-mono text-indigo-300 shadow-inner">
-            <span>▶️ Instant Playback in Telegram Video Player without buffering delay</span>
+          <div className="bg-slate-950 rounded-2xl p-3.5 text-xs font-mono text-amber-300 shadow-inner">
+            <span>▶️ Instant Zero-Buffer Playback with Automatic Expired Link Repair</span>
           </div>
         </section>
 
         {/* Pillar 4 */}
-        <section className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl space-y-3 backdrop-blur-xs">
-          <div className="w-10 h-10 rounded-xl bg-green-500/10 border border-green-500/30 flex items-center justify-center text-green-400">
-            <HardDrive className="w-5 h-5" />
+        <section className="glass-card-light rounded-3xl p-6 sm:p-7 border border-slate-200/90 shadow-sm space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600">
+            <HardDrive className="w-6 h-6" />
           </div>
-          <h3 className="text-sm font-bold text-slate-100">4. 16:9 Thumbnail Extraction Pipeline</h3>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            Auto-extracts frame at timestamp <code className="text-green-400">00:00:01</code> with precision scaling:
-            <br />
-            <code className="text-slate-300 text-[10px] block mt-1.5 bg-[#0B1120]/80 border border-slate-700/80 p-2 rounded-lg font-mono">
-              -vf scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2
-            </code>
-            This guarantees pristine 16:9 display in Telegram chats and previews on iOS, Android, and Desktop.
+          <h3 className="text-base font-black text-slate-950">4. 16:9 HD Thumbnail Extraction</h3>
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+            Auto-extracts frame at timestamp <code className="bg-slate-100 text-emerald-700 px-1.5 py-0.5 rounded font-mono font-bold">00:00:02</code> with precision 1280x720 letterbox padding, creating rich native previews in Telegram and player interfaces.
           </p>
+          <div className="bg-slate-950 rounded-2xl p-3.5 text-xs font-mono text-emerald-300 shadow-inner">
+            <span>🖼️ 1280x720 HD 16:9 Thumbnail Rendered for Chat Previews</span>
+          </div>
         </section>
       </div>
     </div>

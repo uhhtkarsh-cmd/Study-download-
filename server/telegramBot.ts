@@ -1,10 +1,10 @@
-import { Bot } from "grammy";
+import { Bot, InputFile } from "grammy";
 import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { turboHlsDownloader, StreamQuality, fetchBuffer } from "./hlsEngine";
+import { turboHlsDownloader, StreamQuality, fetchBuffer, decodeStudySparkPayload } from "./hlsEngine";
 
 export interface BotLog {
   id: string;
@@ -85,6 +85,7 @@ class TelegramBotManager {
   public customThumbnailPath: string | null = null;
   public userSpeedMultiplier: number = 1.0;
   public autoScreenshotsEnabled: boolean = true;
+  public userScreenshotPrefs = new Map<number, boolean>();
 
   public state: BotState = {
     isRunning: false,
@@ -516,12 +517,16 @@ Send any <b>.m3u8 stream link</b> to:
         await ctx.reply("📦 <b>Batch Downloader:</b>\nPaste multiple .m3u8 links separated by lines:\n\n<code>/batch\nhttps://site.com/lec1.m3u8\nhttps://site.com/lec2.m3u8</code>", { parse_mode: "HTML" });
         return;
       }
-      await ctx.reply(`🚀 <b>Queued ${urls.length} batch stream downloads!</b> Processing sequentially...`, { parse_mode: "HTML" });
-      for (let i = 0; i < urls.length; i++) {
-        const u = urls[i];
-        await this.handleStreamLink(ctx.chat.id, ctx.from?.first_name || "User", u, `Batch_Lecture_${i + 1}`);
-        await new Promise((r) => setTimeout(r, 500));
-      }
+      await ctx.reply(`🚀 <b>Queued ${urls.length} batch stream downloads!</b> Processing in background...`, { parse_mode: "HTML" });
+      (async () => {
+        for (let i = 0; i < urls.length; i++) {
+          const u = urls[i];
+          await this.handleStreamLink(ctx.chat.id, ctx.from?.first_name || "User", u, `Batch_Lecture_${i + 1}`);
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      })().catch((err) => {
+        this.addLog("error", `Batch processing error: ${err?.message}`);
+      });
     });
 
     // Handle Photo uploads for custom thumbnails
@@ -595,7 +600,7 @@ Send any <b>.m3u8 stream link</b> to:
 
       if (data === "demo_stream") {
         const sampleUrl = "https://p01--streamthorr--fttnk8y47n9c.code.run/stream/8f1V1vpp9vt_IKk2.34Pien8np-BiXHC_0UiUKjAhpHnSDFcGiR4EH6CHbAGIoFIKYPB7-ezwBw1MACEWKzwL0kr9p6cwq4ihbxDqLf00sbU6QOZL3CueKm3c5Fslu-v0uYEbaxPVsrsY0oDtCFNDoedHJLFoK_G177LQCpPDT-hFj9cWgw_u8VuGU5p8wlgm3FVNRGvDy2fZ6YQ6mJ8woz-eYWcm5EnYOutVBUKkd7uT77Dir2HGZ7qcEmZGVggN0ZX6fneCDb2Edn42c9CXwdaNWfjgVI7T0M_LGL6ah_W9dFDhhhCulk_A5UmF9GmJh3sEbT2-Vh-vvicSfoXaRsrDnWyWEeBtL2PRP_P6H9BPJjqRXYoxLdXWSr6UT_9oCIOAZ-RUuDWJq4nXMo56avH65uvq3lPqUji_eGCqNk-1Sbu95vG7u3HEaWY3gRPVEU7NJKFWYVc0h0Q1tNJg2OEH0rNjNq3WY2ejufpvO3TvHDMxezOHZC-PRJgAKzOcVUfEnBx9WaVgyK6kAXGdDbhJ47fdZtiDPrnu7fus_P6FCkeyOsBUoPSJoeK2nsU3aorBF1n1dGvnMEY_JHxynZQII178chSeKnpFhr_VZC46cce5S_U7oQLJaxST2zWo-_R5qv-e-6OvSNn_l9HTcAXSfbjsv4_ch-vMxeegQZyYuBbPg6sL1lrk_iGTL74n7nD0HS0j2JUuTGIaT6tQfyz5zzKgP_L7AFRpwJIIrG2zQq-V-tMRsRJbuZ--0RdT6D-qmw3TgOi5E83iBnSnqEbq5U2lz-F_-WlYiQQ_-5su8Z6XSr_v6bSv1YIF-odk9bIkcrDthIjqjtP6ZLRhwyjRZPZVbxKOimSJOOMX2_028_SXbGXqBYXFNTVWEMaAPhPAzfyUWqTtI8G4w5KmX-C7_dnUNMOa87rSFuFYvad1Ed5IzSs66e-dM266-q_GGUQuaE3nSIPidc3XvH8e4-Fh1V0ZhvOM1K2TZKas_AoSQN_t1qqpIaY1XFifa2R7Iaf_xI-PSRWYSN3ckZseVuXX18wPZmSn5LgVnewind0ex0i9T9Kr9R905wiv23lVY8E1leKZDxzQ-Q/master.m3u8";
-        await this.handleStreamLink(ctx.chat!.id, ctx.from.first_name, sampleUrl);
+        this.handleStreamLink(ctx.chat!.id, ctx.from.first_name, sampleUrl).catch(console.error);
       } else if (data === "domain_set_dev") {
         const devUrl = "https://ais-dev-b2kpg7vttxmaknlxjzkobi-363028248926.asia-southeast1.run.app";
         this.publicDomain = devUrl;
@@ -612,6 +617,23 @@ Send any <b>.m3u8 stream link</b> to:
       } else if (data === "speedtest_action") {
         const ping = Math.floor(Math.random() * 15) + 10;
         await ctx.reply(`⚡ <b>Bandwidth:</b> 1000+ Mbps | <b>Ping:</b> ${ping}ms | <b>Delivery:</b> Up to 2GB Full Video`, { parse_mode: "HTML" });
+      } else if (data.startsWith("toggle_screens:")) {
+        const shortId = data.replace("toggle_screens:", "");
+        const current = this.userScreenshotPrefs.get(ctx.chat!.id) ?? true;
+        const updated = !current;
+        this.userScreenshotPrefs.set(ctx.chat!.id, updated);
+        
+        const stream = this.activeStreams.get(shortId);
+        if (stream) {
+          const inlineKeyboard = this.buildStreamKeyboard(shortId, stream.qualities, updated);
+          try {
+            await ctx.editMessageReplyMarkup({
+              reply_markup: {
+                inline_keyboard: inlineKeyboard
+              }
+            });
+          } catch {}
+        }
       } else if (data.startsWith("dl_q:")) {
         // e.g. dl_q:shortId:720p or dl_q:shortId:480p
         const parts = data.split(":");
@@ -623,7 +645,10 @@ Send any <b>.m3u8 stream link</b> to:
           return;
         }
         const quality = stream.qualities.find((q) => q.id === qualityId) || stream.qualities[0];
-        await this.startDownloadPipeline(ctx.chat!.id, ctx.from.first_name, quality?.url || stream.url, stream.title, qualityId, quality?.label);
+        // Execute download in background non-blocking promise
+        this.startDownloadPipeline(ctx.chat!.id, ctx.from.first_name, quality?.url || stream.url, stream.title, qualityId, quality?.label).catch((err) => {
+          this.addLog("error", `Background task failed: ${err.message}`);
+        });
       } else if (data.startsWith("dl_fast:")) {
         const key = data.replace("dl_fast:", "");
         const stream = this.activeStreams.get(key);
@@ -631,7 +656,10 @@ Send any <b>.m3u8 stream link</b> to:
           await ctx.reply("⚠️ <i>Stream link expired. Please paste the .m3u8 link again.</i>", { parse_mode: "HTML" });
           return;
         }
-        await this.startDownloadPipeline(ctx.chat!.id, ctx.from.first_name, stream.url, stream.title);
+        // Execute download in background non-blocking promise
+        this.startDownloadPipeline(ctx.chat!.id, ctx.from.first_name, stream.url, stream.title).catch((err) => {
+          this.addLog("error", `Background task failed: ${err.message}`);
+        });
       } else if (data.startsWith("dl_custom:")) {
         const key = data.replace("dl_custom:", "");
         const stream = this.activeStreams.get(key);
@@ -659,7 +687,10 @@ Send any <b>.m3u8 stream link</b> to:
         if (!customName.endsWith(".mp4") && !customName.endsWith(".mkv")) {
           customName += ".mp4";
         }
-        await this.startDownloadPipeline(chatId, firstName, pending.url, customName, pending.qualityId, pending.qualityLabel);
+        // Execute in background
+        this.startDownloadPipeline(chatId, firstName, pending.url, customName, pending.qualityId, pending.qualityLabel).catch((err) => {
+          this.addLog("error", `Background task failed: ${err.message}`);
+        });
         return;
       }
 
@@ -668,10 +699,6 @@ Send any <b>.m3u8 stream link</b> to:
       if (urlMatch) {
         const url = urlMatch[1].trim();
 
-        // Extract metadata if user pasted format like:
-        // Name: Solution 6: Roult's Law NO DPP
-        // Quality: 480
-        // Size: 246.45 MB
         let explicitTitle: string | undefined;
         let explicitQuality: string | undefined;
 
@@ -687,7 +714,6 @@ Send any <b>.m3u8 stream link</b> to:
           }
         }
 
-        // If no explicit Name: keyword found, check for a title line before the URL
         if (!explicitTitle) {
           for (const line of lines) {
             const trimmed = line.replace(/^[🎬📁⚡✨🚀🎥•\-\*\s]+/, "").trim();
@@ -706,7 +732,10 @@ Send any <b>.m3u8 stream link</b> to:
           }
         }
 
-        await this.handleStreamLink(chatId, firstName, url, explicitTitle, explicitQuality, rawText);
+        // Process link in background so bot remains 100% interactive for next messages
+        this.handleStreamLink(chatId, firstName, url, explicitTitle, explicitQuality, rawText).catch((err) => {
+          this.addLog("error", `Handle stream link error: ${err.message}`);
+        });
       } else {
         await ctx.reply("❓ <b>Please send a valid .m3u8 stream link or message containing link</b>\n\n<i>Tip: You can paste messages like:</i>\n<code>Name: Solution 6: Roult's Law NO DPP\nhttps://example.com/master.m3u8</code>", { parse_mode: "HTML" });
       }
@@ -737,6 +766,12 @@ Send any <b>.m3u8 stream link</b> to:
   }
 
   private extractTitleFromUrl(url: string, rawUserMessage?: string): string {
+    // 0. Check if base64 encoded stream payload has customTitle
+    const decoded = decodeStudySparkPayload(url);
+    if (decoded?.customTitle && decoded.customTitle.trim().length > 2) {
+      return this.sanitizeFilename(decoded.customTitle);
+    }
+
     // 1. Check if the user's message contains an explicit Title or Name
     if (rawUserMessage) {
       const lines = rawUserMessage.split("\n");
@@ -808,6 +843,87 @@ Send any <b>.m3u8 stream link</b> to:
     return `Lecture_Video_${timeStr}.mp4`;
   }
 
+  private isSimulatedChat(chatId: number): boolean {
+    return !chatId || chatId === 99999999 || chatId > 90000000000;
+  }
+
+  private async safeSendMessage(chatId: number, text: string, options?: any) {
+    if (this.isSimulatedChat(chatId) || !this.bot) return null;
+    try {
+      return await this.bot.api.sendMessage(chatId, text, options);
+    } catch (err: any) {
+      this.addLog("warn", `Telegram message notice for [${chatId}]: ${err?.message || err}`);
+      return null;
+    }
+  }
+
+  private async safeEditMessage(chatId: number, msgId: number, text: string, options?: any) {
+    if (this.isSimulatedChat(chatId) || !this.bot || !msgId) return null;
+    try {
+      return await this.bot.api.editMessageText(chatId, msgId, text, options);
+    } catch {
+      return null;
+    }
+  }
+
+  private async safeDeleteMessage(chatId: number, msgId: number) {
+    if (this.isSimulatedChat(chatId) || !this.bot || !msgId) return;
+    try {
+      await this.bot.api.deleteMessage(chatId, msgId);
+    } catch {
+      // Ignore
+    }
+  }
+
+  public buildStreamKeyboard(shortId: string, qualities: StreamQualityInfo[], screenshotsEnabled: boolean): any[][] {
+    const inlineKeyboard: any[][] = [];
+    const appUrl = this.getAppUrl();
+    const liveStreamPlayerUrl = `${appUrl}/player/${shortId}`;
+
+    // Row 1: Quality selection buttons
+    if (qualities.length > 1) {
+      const qButtons = qualities.slice(0, 4).map((q) => {
+        let icon = "🎬";
+        if (q.id.includes("480")) icon = "📱";
+        if (q.id.includes("360")) icon = "⚡";
+        if (q.id.includes("240")) icon = "📶";
+        return {
+          text: `${icon} ${q.label} (${q.estimatedSizeMB || ""})`,
+          callback_data: `dl_q:${shortId}:${q.id}`
+        };
+      });
+
+      for (let i = 0; i < qButtons.length; i += 2) {
+        inlineKeyboard.push(qButtons.slice(i, i + 2));
+      }
+    } else {
+      inlineKeyboard.push([
+        { text: "⚡ Fast Download (Full Video)", callback_data: `dl_fast:${shortId}` }
+      ]);
+    }
+
+    // Row 2: Screenshot Option (Yes / No Toggle)
+    inlineKeyboard.push([
+      {
+        text: `📸 Screenshots: ${screenshotsEnabled ? "✅ YES (5x Previews Included)" : "❌ NO (Video Only)"}`,
+        callback_data: `toggle_screens:${shortId}`
+      }
+    ]);
+
+    // Row 3: Instant Web Player
+    inlineKeyboard.push([
+      { text: "▶️ ⚡ Instant Online Player", url: liveStreamPlayerUrl }
+    ]);
+
+    // Bottom row: Title & Cancel
+    inlineKeyboard.push([
+      { text: "✏️ Custom Title", callback_data: `dl_custom:${shortId}` },
+      { text: "❌ Cancel", callback_data: "dl_cancel" }
+    ]);
+
+    return inlineKeyboard;
+  }
+
   public async handleStreamLink(chatId: number, firstName: string, url: string, explicitTitle?: string, explicitQuality?: string, rawUserMessage?: string) {
     this.addLog("info", `Received stream link from ${firstName}${explicitTitle ? ` ("${explicitTitle}")` : ""}`);
     const autoTitle = explicitTitle ? this.sanitizeFilename(explicitTitle) : this.extractTitleFromUrl(url, rawUserMessage);
@@ -841,55 +957,18 @@ Send any <b>.m3u8 stream link</b> to:
       if (firstKey) this.activeStreams.delete(firstKey);
     }
 
-    const appUrl = this.getAppUrl();
-    const liveStreamPlayerUrl = `${appUrl}/player/${shortId}`;
-
-    // Build quality keyboard
-    const inlineKeyboard: any[][] = [];
-
-    // Row 1: Quality selection buttons
-    if (qualities.length > 1) {
-      const qButtons = qualities.slice(0, 4).map((q) => {
-        let icon = "🎬";
-        if (q.id.includes("480")) icon = "📱";
-        if (q.id.includes("360")) icon = "⚡";
-        if (q.id.includes("240")) icon = "📶";
-        return {
-          text: `${icon} ${q.label} (${q.estimatedSizeMB || ""})`,
-          callback_data: `dl_q:${shortId}:${q.id}`
-        };
-      });
-
-      // Split into pairs of 2
-      for (let i = 0; i < qButtons.length; i += 2) {
-        inlineKeyboard.push(qButtons.slice(i, i + 2));
-      }
-    } else {
-      inlineKeyboard.push([
-        { text: "⚡ Fast Download (Full Video)", callback_data: `dl_fast:${shortId}` }
-      ]);
-    }
-
-    // Row 2: Instant Web Player
-    inlineKeyboard.push([
-      { text: "▶️ ⚡ Instant Online Player", url: liveStreamPlayerUrl }
-    ]);
-
-    // Bottom row: Title & Cancel
-    inlineKeyboard.push([
-      { text: "✏️ Custom Title", callback_data: `dl_custom:${shortId}` },
-      { text: "❌ Cancel", callback_data: "dl_cancel" }
-    ]);
+    const screenshotsEnabled = this.userScreenshotPrefs.get(chatId) ?? true;
+    const inlineKeyboard = this.buildStreamKeyboard(shortId, qualities, screenshotsEnabled);
 
     const promptMsg = 
-`🎬 <b>Stream Ready!</b>
+`🎬 <b>Video Stream Ready</b>
 
 📁 <b>File:</b> <code>${autoTitle}</code>
 ✨ <b>Qualities:</b> ${qualities.map((q) => `<b>${q.label}</b>`).join(" | ")}
 
-<b>Select an option below to start:</b>`;
+<b>Select quality or options below:</b>`;
 
-    await this.bot?.api.sendMessage(chatId, promptMsg, {
+    await this.safeSendMessage(chatId, promptMsg, {
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: inlineKeyboard
@@ -929,20 +1008,24 @@ Send any <b>.m3u8 stream link</b> to:
     this.state.activeTasks.push(task);
     this.addLog("info", `🚀 Starting download task [${taskId}] for "${safeTitle}" (${qLabel})`);
 
-    // Initial status message on Telegram
+    // Initial status message on Telegram (if real chat)
     let statusMsgId: number | null = null;
-    try {
-      const initialBox = this.formatProgressBox(safeTitle, 0, 0, "00:00:00", "00:00:00", `⚡ 128x Turbo Engine (${qLabel}) initializing...`);
-      const sent = await this.bot?.api.sendMessage(chatId, initialBox, { parse_mode: "HTML" });
-      if (sent) statusMsgId = sent.message_id;
-    } catch (e) {
-      console.error(e);
+    if (!this.isSimulatedChat(chatId)) {
+      try {
+        const initialBox = this.formatProgressBox(safeTitle, 0, 0, "00:00:00", "00:00:00", `⚡ 128x Turbo Engine (${qLabel}) initializing...`);
+        const sent = await this.safeSendMessage(chatId, initialBox, { parse_mode: "HTML" });
+        if (sent) statusMsgId = sent.message_id;
+      } catch (e) {
+        console.error(e);
+      }
     }
 
     let lastTelegramUpdate = Date.now();
 
     try {
       this.addLog("info", `⚡ Hyper-Turbo Engine active: downloading 128 chunks concurrently for "${safeTitle}" [${qLabel}]`);
+
+      const userWantsScreens = this.userScreenshotPrefs.get(chatId) ?? true;
 
       // Execute Turbo Hyper-Parallel Chunk Download & Decryption (128 concurrent streams)
       const downloadResult = await turboHlsDownloader.downloadStream(
@@ -959,23 +1042,20 @@ Send any <b>.m3u8 stream link</b> to:
           task.totalDuration = this.formatSeconds(prog.totalDurationSec);
 
           const now = Date.now();
-          if (now - lastTelegramUpdate > 1800 && statusMsgId && this.bot) {
+          if (now - lastTelegramUpdate > 1800 && statusMsgId && !this.isSimulatedChat(chatId)) {
             lastTelegramUpdate = now;
-            try {
-              const liveBox = this.formatProgressBox(
-                safeTitle,
-                prog.percentage,
-                prog.downloadedMB,
-                this.formatSeconds(prog.currentDurationSec),
-                this.formatSeconds(prog.totalDurationSec),
-                `⚡ 128x Max Turbo [${prog.completedSegments}/${prog.totalSegments}] (${prog.speedMBs} MB/s) • ${qLabel}`
-              );
-              await this.bot.api.editMessageText(chatId, statusMsgId, liveBox, { parse_mode: "HTML" });
-            } catch {
-              // Ignore rate limits
-            }
+            const liveBox = this.formatProgressBox(
+              safeTitle,
+              prog.percentage,
+              prog.downloadedMB,
+              this.formatSeconds(prog.currentDurationSec),
+              this.formatSeconds(prog.totalDurationSec),
+              `⚡ 128x Max Turbo [${prog.completedSegments}/${prog.totalSegments}] (${prog.speedMBs} MB/s) • ${qLabel}`
+            );
+            await this.safeEditMessage(chatId, statusMsgId, liveBox, { parse_mode: "HTML" });
           }
-        }
+        },
+        userWantsScreens
       );
 
       const outputFile = downloadResult.outputFilePath;
@@ -1006,23 +1086,17 @@ Send any <b>.m3u8 stream link</b> to:
 
       task.status = "uploading";
 
-      if (statusMsgId && this.bot) {
-        try {
-          const uploadMsg = 
+      if (statusMsgId && !this.isSimulatedChat(chatId)) {
+        const uploadMsg = 
 `⚡ <b>Upload in Progress...</b>
 📁 <b>File:</b> <code>${safeTitle}</code>
 📦 <b>Size:</b> ${fileSizeMB} MB
 ✨ <b>Quality:</b> ${downloadResult.qualityLabel}
 ⏱️ <b>Duration:</b> ${currentDuration}
 🚀 <b>Sending full video directly to your chat...</b>`;
-          await this.bot.api.editMessageText(chatId, statusMsgId, uploadMsg, { parse_mode: "HTML" });
-        } catch {
-          // Ignore
-        }
+        await this.safeEditMessage(chatId, statusMsgId, uploadMsg, { parse_mode: "HTML" });
       }
 
-      const client = await this.getMtprotoClient();
-      const hasThumb = thumbFile && fs.existsSync(thumbFile);
       const appUrl = this.getAppUrl();
       const downloadUrl = `${appUrl}/api/download/${taskId}/${encodeURIComponent(safeTitle)}`;
       const streamUrl = `${appUrl}/player/${taskId}`;
@@ -1034,71 +1108,135 @@ Send any <b>.m3u8 stream link</b> to:
 
 📁 <b>Size:</b> <code>${fileSizeMB} MB</code>
 ⚡ <b>Quality:</b> <code>${downloadResult.qualityLabel}</code>
-🌐 <b>Web Player:</b> <a href="${streamUrl}">Open in ThorStream HD</a>`;
+🌐 <b>Online Player:</b> <a href="${streamUrl}">Watch Video</a>`;
 
-      if (client) {
-        // Direct MTProto upload (Up to 2GB)
-        let lastUploadUpdate = Date.now();
-        await client.sendFile(chatId, {
-          file: outputFile,
-          thumb: hasThumb ? thumbFile : undefined,
-          caption,
-          parseMode: "html",
-          attributes: [
-            new Api.DocumentAttributeVideo({
-              duration: downloadResult.totalDurationSeconds > 0 ? downloadResult.totalDurationSeconds : 300,
-              w: 1280,
-              h: 720,
-              supportsStreaming: true,
-            }),
-          ],
-          progressCallback: async (progress) => {
-            const pVal = Math.round(progress * 100);
-            const now = Date.now();
-            if (now - lastUploadUpdate > 2500 && statusMsgId && this.bot) {
-              lastUploadUpdate = now;
-              try {
-                const upBox = 
-`📤 <b>Uploading:</b> [${this.getProgressBar(pVal)}] <b>${pVal}%</b>
+      if (!this.isSimulatedChat(chatId)) {
+        // Send screenshots if requested
+        if (userWantsScreens && downloadResult.screenshotPaths && downloadResult.screenshotPaths.length > 0) {
+          try {
+            if (this.bot) {
+              const mediaGroup = downloadResult.screenshotPaths.slice(0, 5).map((p, idx) => ({
+                type: "photo" as const,
+                media: new InputFile(p),
+                caption: idx === 0 ? `📸 <b>Preview Screenshots:</b> <code>${cleanTitle}</code>` : undefined,
+                parse_mode: "HTML" as const
+              }));
+              await this.bot.api.sendMediaGroup(chatId, mediaGroup);
+            }
+          } catch (e: any) {
+            this.addLog("warn", `Screenshot preview delivery note: ${e.message}`);
+          }
+        }
+
+        const client = await this.getMtprotoClient();
+        const hasThumb = thumbFile && fs.existsSync(thumbFile);
+        let delivered = false;
+
+        // Option 1: Direct MTProto High-Speed Upload (Supports up to 2,000 MB / 2 GB video files)
+        if (client) {
+          try {
+            let lastUploadUpdate = Date.now();
+            await client.sendFile(chatId, {
+              file: outputFile,
+              thumb: hasThumb ? thumbFile : undefined,
+              caption,
+              parseMode: "html",
+              attributes: [
+                new Api.DocumentAttributeVideo({
+                  duration: downloadResult.totalDurationSeconds > 0 ? downloadResult.totalDurationSeconds : 300,
+                  w: 1280,
+                  h: 720,
+                  supportsStreaming: true,
+                }),
+              ],
+              progressCallback: async (progress) => {
+                const pVal = Math.round(progress * 100);
+                const now = Date.now();
+                if (now - lastUploadUpdate > 2500 && statusMsgId) {
+                  lastUploadUpdate = now;
+                  const upBox = 
+`📤 <b>Uploading Video File:</b> [${this.getProgressBar(pVal)}] <b>${pVal}%</b>
 📁 <b>${safeTitle}</b>`;
-                await this.bot.api.editMessageText(chatId, statusMsgId, upBox, { parse_mode: "HTML" });
+                  await this.safeEditMessage(chatId, statusMsgId, upBox, { parse_mode: "HTML" });
+                }
+              },
+            });
+            delivered = true;
+          } catch (mtErr: any) {
+            this.addLog("warn", `MTProto upload notice for [${chatId}]: ${mtErr.message}`);
+          }
+        }
+
+        // Option 2: GramMy Direct sendVideo (Native Telegram Video Player)
+        if (!delivered && this.bot && fs.existsSync(outputFile)) {
+          try {
+            if (fileSizeBytes < 49 * 1024 * 1024) {
+              await this.bot.api.sendVideo(chatId, new InputFile(outputFile), {
+                caption,
+                parse_mode: "HTML",
+                supports_streaming: true,
+                thumbnail: hasThumb ? new InputFile(thumbFile!) : undefined,
+                duration: downloadResult.totalDurationSeconds > 0 ? downloadResult.totalDurationSeconds : undefined,
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: `📥 Direct Download Link`, url: downloadUrl }],
+                    [{ text: "▶️ Web Stream Player", url: streamUrl }]
+                  ]
+                }
+              });
+              delivered = true;
+            } else {
+              // File is >50MB, send document or fast link
+              try {
+                await this.bot.api.sendDocument(chatId, new InputFile(outputFile), {
+                  caption,
+                  parse_mode: "HTML",
+                  thumbnail: hasThumb ? new InputFile(thumbFile!) : undefined,
+                  reply_markup: {
+                    inline_keyboard: [
+                      [{ text: `📥 Direct Download Video (${fileSizeMB} MB)`, url: downloadUrl }],
+                      [{ text: "▶️ Web Stream Player", url: streamUrl }]
+                    ]
+                  }
+                });
+                delivered = true;
               } catch {
-                // Ignore
+                // Fallback to direct web download buttons
               }
             }
-          },
-        });
-      } else {
-        // Fallback to GramMy sendDocument / sendVideo if MTProto unavailable
-        await this.bot?.api.sendMessage(chatId, caption, {
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: `📥 Download Video`, url: downloadUrl }],
-              [{ text: "▶️ Web Stream Player", url: streamUrl }]
-            ]
+          } catch (botErr: any) {
+            this.addLog("warn", `Bot API sendVideo notice: ${botErr.message}`);
           }
-        });
-      }
+        }
 
-      // Cleanup status box
-      if (statusMsgId && this.bot) {
-        try {
-          await this.bot.api.deleteMessage(chatId, statusMsgId);
-        } catch {
-          // Ignore
+        // Option 3: Fallback interactive link button message
+        if (!delivered) {
+          await this.safeSendMessage(chatId, caption, {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: `📥 Download Video File (${fileSizeMB} MB)`, url: downloadUrl }],
+                [{ text: "▶️ Watch in Liquid Web Player", url: streamUrl }]
+              ]
+            }
+          });
+        }
+
+        // Cleanup status box
+        if (statusMsgId) {
+          await this.safeDeleteMessage(chatId, statusMsgId);
         }
       }
 
       task.status = "completed";
       this.state.totalDownloads += 1;
-      this.addLog("success", `✅ Video "${safeTitle}" (${fileSizeMB} MB) delivered to @${firstName}!`);
+      this.addLog("success", `✅ Video "${safeTitle}" (${fileSizeMB} MB) processed successfully! Available for instant download & streaming.`);
 
     } catch (err: any) {
       this.addLog("error", `Task [${taskId}] failed: ${err?.message || err}`);
       task.status = "error";
-      if (this.bot) {
-        await this.bot.api.sendMessage(chatId, `❌ <b>Download Error:</b> ${err?.message || "Failed to download stream."}`, { parse_mode: "HTML" });
+      if (!this.isSimulatedChat(chatId)) {
+        await this.safeSendMessage(chatId, `❌ <b>Download Error:</b> ${err?.message || "Failed to download stream."}`, { parse_mode: "HTML" });
       }
     } finally {
       // Keep files available for 2 hours
